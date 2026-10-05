@@ -12,6 +12,7 @@
 #include "file.h"
 #include "stat.h"
 #include "proc.h"
+#include "vfs.h"
 
 struct devsw devsw[NDEV];
 struct {
@@ -23,6 +24,7 @@ void
 fileinit(void)
 {
   initlock(&ftable.lock, "ftable");
+  vfs_init();
 }
 
 // Allocate a file structure.
@@ -35,6 +37,7 @@ filealloc(void)
   for(f = ftable.file; f < ftable.file + NFILE; f++){
     if(f->ref == 0){
       f->ref = 1;
+      f->vn = 0;
       release(&ftable.lock);
       return f;
     }
@@ -79,6 +82,10 @@ fileclose(struct file *f)
     begin_op();
     iput(ff.ip);
     end_op();
+    // The vnode owns a separate inode reference during the S0 bridge.
+    // Its final release starts its own transaction.
+    if(ff.vn)
+      vfs_put(ff.vn);
   }
 }
 
@@ -91,9 +98,18 @@ filestat(struct file *f, uint64 addr)
   struct stat st;
   
   if(f->type == FD_INODE || f->type == FD_DEVICE){
-    ilock(f->ip);
-    stati(f->ip, &st);
-    iunlock(f->ip);
+    if(f->type == FD_INODE){
+      int r;
+      vfs_lock(f->vn);
+      r = vfs_getattr(f->vn, &st);
+      vfs_unlock(f->vn);
+      if(r < 0)
+        return -1;
+    } else {
+      ilock(f->ip);
+      stati(f->ip, &st);
+      iunlock(f->ip);
+    }
     if(copyout(p->pagetable, addr, (char *)&st, sizeof(st)) < 0)
       return -1;
     return 0;
@@ -108,7 +124,7 @@ fileread(struct file *f, uint64 addr, int n)
 {
   int r = 0;
 
-  if(f->readable == 0)
+  if(f->readable == 0 || n < 0)
     return -1;
 
   if(f->type == FD_PIPE){
@@ -118,10 +134,12 @@ fileread(struct file *f, uint64 addr, int n)
       return -1;
     r = devsw[f->major].read(1, addr, n);
   } else if(f->type == FD_INODE){
-    ilock(f->ip);
-    if((r = readi(f->ip, 1, addr, f->off, n)) > 0)
+    vfs_lock(f->vn);
+    if((uint)n > (uint)-1 - f->off)
+      r = -1;
+    else if((r = vfs_read_at(f->vn, 1, addr, f->off, n)) > 0)
       f->off += r;
-    iunlock(f->ip);
+    vfs_unlock(f->vn);
   } else {
     panic("fileread");
   }

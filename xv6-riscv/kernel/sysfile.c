@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "vfs_backend.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -366,6 +367,17 @@ sys_open(void)
 
   iunlock(ip);
   end_op();
+
+  // vfs_xv6_get may release an extra reference inside its own transaction.
+  // The original inode is now unlocked and the open transaction has ended.
+  if(f->type == FD_INODE){
+    f->vn = vfs_xv6_get(ip);
+    if(f->vn == 0){
+      myproc()->ofile[fd] = 0;
+      fileclose(f);
+      return -1;
+    }
+  }
 
   return fd;
 }

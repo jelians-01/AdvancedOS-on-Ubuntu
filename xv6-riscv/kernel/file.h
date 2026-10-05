@@ -5,6 +5,7 @@ struct file {
   char writable;
   struct pipe *pipe; // FD_PIPE
   struct inode *ip;  // FD_INODE and FD_DEVICE
+  struct vnode *vn;  // FD_INODE; owns one VFS reference
   uint off;          // FD_INODE
   short major;       // FD_DEVICE
 };
