@@ -130,3 +130,61 @@ vfs_truncate_zero(struct vnode *vn)
     return -1;
   return vn->ops->truncate_zero(vn->data);
 }
+
+void*
+vfs_node_data(struct vnode *vn, const struct vnode_ops *ops)
+{
+  return vn->ops == ops ? vn->data : 0;
+}
+
+struct vnode*
+vfs_lookup(struct vnode *dir, const char *name, uint len)
+{
+  void *data = 0;
+  struct vnode *vn;
+  uint i;
+
+  if(name == 0 || len == 0 || len >= MAXPATH || dir->ops->lookup == 0)
+    return 0;
+  for(i = 0; i < len; i++)
+    if(name[i] == '/' || name[i] == 0)
+      return 0;
+  if(dir->ops->lookup(dir->data, name, len, &data) < 0 || data == 0)
+    return 0;
+  vn = vfs_node_get(dir->ops, data);
+  if(vn == 0)
+    dir->ops->release(data);
+  return vn;
+}
+
+struct vnode*
+vfs_walk(struct vnode *start, const char *path)
+{
+  struct vnode *vn, *next;
+  const char *name;
+  uint len;
+
+  if(start == 0 || path == 0)
+    return 0;
+  for(len = 0; len < MAXPATH && path[len] != 0; len++)
+    ;
+  if(len == MAXPATH)
+    return 0;
+
+  vn = vfs_dup(start);
+  for(;;){
+    while(*path == '/')
+      path++;
+    if(*path == 0)
+      return vn;
+    name = path;
+    while(*path != 0 && *path != '/')
+      path++;
+    // Pass the full component; name limits belong to the backend.
+    next = vfs_lookup(vn, name, path - name);
+    vfs_put(vn);
+    if(next == 0)
+      return 0;
+    vn = next;
+  }
+}

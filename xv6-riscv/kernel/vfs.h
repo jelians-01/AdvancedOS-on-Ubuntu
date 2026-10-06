@@ -42,4 +42,16 @@ int vfs_write_at(struct vnode *vn, int user_src,
 // Truncate a regular file to zero bytes; return 0 or -1.
 int vfs_truncate_zero(struct vnode *vn);
 
+// Borrow dir; no node lock or outer native transaction.
+// name is one kernel path component of len bytes, without '/' or NUL.
+// Return one unlocked vnode reference, or 0 on failure.
+struct vnode *vfs_lookup(struct vnode *dir, const char *name, uint len);
+
+// Single-root transition: caller selects root for absolute paths or cwd
+// for relative paths. Leading '/' does not change start inside this helper.
+// Borrow start; path is a kernel string shorter than MAXPATH.
+// Return one unlocked reference, including for an empty path, or 0.
+// No node lock or outer native transaction; no mount traversal yet.
+struct vnode *vfs_walk(struct vnode *start, const char *path);
+
 #endif

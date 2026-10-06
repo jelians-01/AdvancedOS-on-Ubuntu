@@ -309,12 +309,19 @@ sys_open(void)
   char path[MAXPATH];
   int fd, omode;
   struct file *f;
-  struct inode *ip;
+  struct inode *ip = 0;
   int n;
 
   argint(1, &omode);
   if((n = argstr(0, path, MAXPATH)) < 0)
     return -1;
+
+  // The VFS walker may release nodes in its own native transactions.
+  if(!(omode & O_CREATE)){
+    ip = vfs_xv6_namei(path);
+    if(ip == 0)
+      return -1;
+  }
 
   begin_op();
 
@@ -325,10 +332,6 @@ sys_open(void)
       return -1;
     }
   } else {
-    if((ip = namei(path)) == 0){
-      end_op();
-      return -1;
-    }
     ilock(ip);
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);

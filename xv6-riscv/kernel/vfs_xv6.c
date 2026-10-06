@@ -4,6 +4,7 @@
 #include "param.h"
 #include "fs.h"
 #include "spinlock.h"
+#include "proc.h"
 #include "sleeplock.h"
 #include "file.h"
 #include "stat.h"
@@ -97,6 +98,33 @@ native_truncate_zero(void *data)
   return 0;
 }
 
+static int
+native_lookup(void *data, const char *name, uint len, void **out_node)
+{
+  struct inode *dp = data, *ip = 0;
+  char native_name[DIRSIZ];
+
+  *out_node = 0;
+  if(len == 0)
+    return -1;
+  // Preserve rev5's first-DIRSIZ-byte matching, only in this backend.
+  memset(native_name, 0, sizeof(native_name));
+  if(len > DIRSIZ)
+    len = DIRSIZ;
+  memmove(native_name, name, len);
+
+  // Lookup only reads and acquires a reference; no iput or log writes.
+  // Never lock the child here: "." can refer to dp itself.
+  ilock(dp);
+  if(dp->type == T_DIR)
+    ip = dirlookup(dp, native_name, 0);
+  iunlock(dp);
+  if(ip == 0)
+    return -1;
+  *out_node = ip;
+  return 0;
+}
+
 static const struct vnode_ops native_ops = {
   .lock = native_lock,
   .unlock = native_unlock,
@@ -105,6 +133,7 @@ static const struct vnode_ops native_ops = {
   .release = native_release,
   .write_at = native_write_at,
   .truncate_zero = native_truncate_zero,
+  .lookup = native_lookup,
 };
 
 struct vnode*
@@ -121,4 +150,38 @@ vfs_xv6_get(struct inode *ip)
   if(vn == 0)
     native_release(ip);
   return vn;
+}
+
+struct inode*
+vfs_xv6_namei(const char *path)
+{
+  struct inode *ip;
+  struct vnode *start, *vn;
+
+  if(path == 0)
+    return 0;
+  if(*path == '/'){
+    // Bootstrap only the native root; VFS walks the actual input path.
+    begin_op();
+    ip = namei("/");
+    end_op();
+  } else {
+    ip = idup(myproc()->cwd);
+  }
+  if(ip == 0)
+    return 0;
+  start = vfs_xv6_get(ip);
+  native_release(ip);
+  if(start == 0)
+    return 0;
+
+  vn = vfs_walk(start, path);
+  vfs_put(start);
+  if(vn == 0)
+    return 0;
+  ip = vfs_node_data(vn, &native_ops);
+  if(ip)
+    idup(ip);
+  vfs_put(vn);
+  return ip;
 }
