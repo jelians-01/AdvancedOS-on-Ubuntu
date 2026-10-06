@@ -1,0 +1,90 @@
+# xv6 虚拟文件系统与硬件抽象层
+
+本项目以 xv6-riscv 为基础，围绕虚拟文件系统（VFS）和硬件抽象层（HAL）开展扩展，目标是统一文件系统访问接口，支持多种文件系统，并逐步推进 LoongArch 平台适配。内核源码位于 `xv6-riscv/`。
+
+## 当前进展
+
+| 模块 | 状态 |
+|---|---|
+| RISC-V 原生 xv6 | 可编译、启动，完整原版 `usertests` 通过 |
+| 多磁盘与 D1 块设备接口 | 已实现三设备管理、字节读写、容量查询和设备刷新 |
+| VFS 与文件系统后端 | 待集成，本分支尚未包含 ext2/FAT32 后端 |
+| LoongArch 平台适配 | 待实现启动、异常、内存和设备支持 |
+
+本阶段重点是多磁盘与块设备层，为文件系统后端提供统一的底层 I/O 接口。设备可读写不等同于文件系统已完成挂载。
+
+## 目录结构
+
+```text
+xv6-riscv/
+  kernel/           内核、块设备接口及 VirtIO 驱动
+  user/             用户程序与原版回归测试
+  mkfs/             原生文件系统镜像构建工具
+  tests/            块设备自动化测试
+任务分配/C成员/       块设备接口说明、阶段验收与测试日志
+```
+
+## 编译与启动
+
+在 Ubuntu 中进入源码目录，准备 RISC-V GCC/binutils、make、原生 gcc、perl、bc 和 QEMU 7.2 或更新版本。
+
+```bash
+cd xv6-riscv
+make qemu
+```
+
+QEMU 未加入 PATH 时，可使用 `make qemu QEMU=/实际安装路径/qemu-system-riscv64`。
+
+看到 `$` 后即可执行 xv6 命令。退出 QEMU：先按 Ctrl+A，再按 X。
+
+额外的数据盘通过固定插槽连接：
+
+```bash
+make qemu QEMU=/绝对路径/qemu-system-riscv64 \
+  DISK2=/绝对路径/dev2.img DISK3=/绝对路径/dev3.img
+```
+
+dev=1 是原生根盘，dev=2/3 是数据盘。D1 不负责格式化、挂载或解析分区；只有文件系统后端接入后，数据卷才能通过文件路径访问。
+
+## 块设备接口
+
+接口声明位于 `xv6-riscv/kernel/blkdev.h`，实现位于 `blkdev.c`，底层驱动位于 `virtio_disk.c`。D1 提供 `blk_read`、`blk_write`、`blk_size` 和 `blk_flush`；偏移及长度以字节计，调用同步完成，成功返回 0，失败返回 -1。
+
+详细约束、设备映射、公共文件改动和证据见 [D1 交付说明](任务分配/C成员/D1交付说明.md)。
+
+## 测试
+
+在 Ubuntu 的源码目录执行自动化测试。如果 QEMU 已加入 PATH，可省略 `XV6_QEMU` 设置：
+
+```bash
+cd xv6-riscv
+export XV6_QEMU=/绝对路径/qemu-system-riscv64
+python3 tests/run_c_tests.py --quick
+# 完整原版回归（包括慢速组）
+python3 tests/run_c_tests.py
+```
+
+脚本在 `test-output/` 中新建构建副本和一次性数据盘，保存编译日志、串口日志与运行配置。诊断构建会写入测试盘，不要对真实文件系统镜像启用 `BLKDEV_SELFTEST=1`。
+
+宿主并发及错误注入测试运行真实 `kernel/blkdev.c`，使用内存盘和 pthread 锁替代硬件及内核锁：
+
+```bash
+mkdir -p test-output/host
+gcc -DBLKDEV_HOST_TEST -g -O1 -pthread -fsanitize=address,undefined \
+  kernel/blkdev.c tests/blkdev_host_test.c -o test-output/host/blkdev_host_test
+test-output/host/blkdev_host_test
+```
+
+2026-10-06 阶段验证通过：三设备隔离、非对齐读写、刷新后重启读回、只读盘处理、单根盘兼容、完整原版 `usertests`（含慢速组），以及 20000 次宿主并发部分扇区写入。运行配置和日志见 [阶段验收记录](任务分配/C成员/本次接入验收.md)。
+
+宿主测试验证块设备层的读改写逻辑；文件系统后端接入后，还需进行内核并发、挂载与文件操作的联调验收。
+
+## 协作分工
+
+| 成员 | 负责范围 |
+|---|---|
+| A | VFS、公共接口与系统调用接入 |
+| B | ext2/FAT32 后端与文件系统镜像 |
+| C | HAL、块设备与多磁盘、LoongArch 平台适配 |
+
+公共文件改动通过个人分支和 Pull Request 审阅后合并。构建产物、QEMU 程序和数据镜像不提交到仓库。
