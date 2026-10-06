@@ -48,12 +48,63 @@ native_release(void *data)
   end_op();
 }
 
+static int
+native_write_at(void *data, int user_src, uint64 src, uint off, uint n)
+{
+  struct inode *ip = data;
+  uint done = 0;
+  uint max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
+
+  // Keep each chunk within the native log's capacity.
+  while(done < n){
+    uint count = n - done;
+    int r;
+
+    if(count > max)
+      count = max;
+    begin_op();
+    ilock(ip);
+    if(ip->type == T_FILE)
+      r = writei(ip, user_src, src + done, off + done, count);
+    else
+      r = -1;
+    iunlock(ip);
+    end_op();
+
+    if(r > 0)
+      done += r;
+    if(r != (int)count)
+      return done ? (int)done : -1;
+  }
+  return (int)done;
+}
+
+static int
+native_truncate_zero(void *data)
+{
+  struct inode *ip = data;
+
+  begin_op();
+  ilock(ip);
+  if(ip->type != T_FILE){
+    iunlock(ip);
+    end_op();
+    return -1;
+  }
+  itrunc(ip);
+  iunlock(ip);
+  end_op();
+  return 0;
+}
+
 static const struct vnode_ops native_ops = {
   .lock = native_lock,
   .unlock = native_unlock,
   .read_at = native_read_at,
   .getattr = native_getattr,
   .release = native_release,
+  .write_at = native_write_at,
+  .truncate_zero = native_truncate_zero,
 };
 
 struct vnode*

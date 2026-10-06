@@ -30,4 +30,16 @@ int vfs_read_at(struct vnode *vn, int user_dst,
 // Return 0 on success, or -1 on error.
 int vfs_getattr(struct vnode *vn, struct stat *st);
 
+// Caller holds a reference, but no node lock or native log transaction.
+// user_src: 1 for a user address, 0 for a kernel address.
+// Return bytes written, 0 for an empty request, or -1 if no progress.
+// A partial write returns its positive byte count. Does not change file.off.
+int vfs_write_at(struct vnode *vn, int user_src,
+                 uint64 src, uint off, uint n);
+
+// Caller holds a reference, but no node lock or native log transaction.
+// The backend locks the node and handles its own transaction.
+// Truncate a regular file to zero bytes; return 0 or -1.
+int vfs_truncate_zero(struct vnode *vn);
+
 #endif

@@ -7,6 +7,7 @@ struct file {
   struct inode *ip;  // FD_INODE and FD_DEVICE
   struct vnode *vn;  // FD_INODE; owns one VFS reference
   uint off;          // FD_INODE
+  struct sleeplock poslock; // protects FD_INODE offset and I/O
   short major;       // FD_DEVICE
 };
 

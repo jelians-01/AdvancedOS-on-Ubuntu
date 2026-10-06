@@ -23,7 +23,11 @@ struct {
 void
 fileinit(void)
 {
+  struct file *f;
+
   initlock(&ftable.lock, "ftable");
+  for(f = ftable.file; f < ftable.file + NFILE; f++)
+    initsleeplock(&f->poslock, "filepos");
   vfs_init();
 }
 
@@ -62,7 +66,10 @@ filedup(struct file *f)
 void
 fileclose(struct file *f)
 {
-  struct file ff;
+  int type, writable;
+  struct pipe *pipe;
+  struct inode *ip;
+  struct vnode *vn;
 
   acquire(&ftable.lock);
   if(f->ref < 1)
@@ -71,21 +78,27 @@ fileclose(struct file *f)
     release(&ftable.lock);
     return;
   }
-  ff = *f;
+  // Save resources, not the sleep lock, before this slot can be reused.
+  type = f->type;
+  writable = f->writable;
+  pipe = f->pipe;
+  ip = f->ip;
+  vn = f->vn;
   f->ref = 0;
   f->type = FD_NONE;
+  f->vn = 0;
   release(&ftable.lock);
 
-  if(ff.type == FD_PIPE){
-    pipeclose(ff.pipe, ff.writable);
-  } else if(ff.type == FD_INODE || ff.type == FD_DEVICE){
+  if(type == FD_PIPE){
+    pipeclose(pipe, writable);
+  } else if(type == FD_INODE || type == FD_DEVICE){
     begin_op();
-    iput(ff.ip);
+    iput(ip);
     end_op();
-    // The vnode owns a separate inode reference during the S0 bridge.
-    // Its final release starts its own transaction.
-    if(ff.vn)
-      vfs_put(ff.vn);
+    // The bridge still owns separate inode and vnode references.
+    // The vnode's final release starts its own transaction.
+    if(vn)
+      vfs_put(vn);
   }
 }
 
@@ -134,12 +147,14 @@ fileread(struct file *f, uint64 addr, int n)
       return -1;
     r = devsw[f->major].read(1, addr, n);
   } else if(f->type == FD_INODE){
+    acquiresleep(&f->poslock);
     vfs_lock(f->vn);
     if((uint)n > (uint)-1 - f->off)
       r = -1;
     else if((r = vfs_read_at(f->vn, 1, addr, f->off, n)) > 0)
       f->off += r;
     vfs_unlock(f->vn);
+    releasesleep(&f->poslock);
   } else {
     panic("fileread");
   }
@@ -154,7 +169,7 @@ filewrite(struct file *f, uint64 addr, int n)
 {
   int r, ret = 0;
 
-  if(f->writable == 0)
+  if(f->writable == 0 || n < 0)
     return -1;
 
   if(f->type == FD_PIPE){
@@ -164,31 +179,14 @@ filewrite(struct file *f, uint64 addr, int n)
       return -1;
     ret = devsw[f->major].write(1, addr, n);
   } else if(f->type == FD_INODE){
-    // write a few blocks at a time to avoid exceeding
-    // the maximum log transaction size, including
-    // i-node, indirect block, allocation blocks,
-    // and 2 blocks of slop for non-aligned writes.
-    int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
-    int i = 0;
-    while(i < n){
-      int n1 = n - i;
-      if(n1 > max)
-        n1 = max;
-
-      begin_op();
-      ilock(f->ip);
-      if ((r = writei(f->ip, 1, addr + i, f->off, n1)) > 0)
-        f->off += r;
-      iunlock(f->ip);
-      end_op();
-
-      if(r != n1){
-        // error from writei
-        break;
-      }
-      i += r;
-    }
-    ret = (i == n ? n : -1);
+    // The backend owns the node lock and native log transactions.
+    acquiresleep(&f->poslock);
+    r = vfs_write_at(f->vn, 1, addr, f->off, n);
+    if(r > 0)
+      f->off += r;
+    releasesleep(&f->poslock);
+    // Preserve rev5's user-visible error on an incomplete write.
+    ret = (r == n ? n : -1);
   } else {
     panic("filewrite");
   }

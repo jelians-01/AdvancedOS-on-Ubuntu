@@ -16,6 +16,7 @@
 #include "file.h"
 #include "fcntl.h"
 #include "vfs_backend.h"
+#include "vfs.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -361,10 +362,6 @@ sys_open(void)
   f->readable = !(omode & O_WRONLY);
   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
 
-  if((omode & O_TRUNC) && ip->type == T_FILE){
-    itrunc(ip);
-  }
-
   iunlock(ip);
   end_op();
 
@@ -373,6 +370,11 @@ sys_open(void)
   if(f->type == FD_INODE){
     f->vn = vfs_xv6_get(ip);
     if(f->vn == 0){
+      myproc()->ofile[fd] = 0;
+      fileclose(f);
+      return -1;
+    }
+    if((omode & O_TRUNC) && vfs_truncate_zero(f->vn) < 0){
       myproc()->ofile[fd] = 0;
       fileclose(f);
       return -1;

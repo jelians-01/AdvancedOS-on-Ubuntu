@@ -109,3 +109,24 @@ vfs_getattr(struct vnode *vn, struct stat *st)
 {
   return vn->ops->getattr(vn->data, st);
 }
+
+int
+vfs_write_at(struct vnode *vn, int user_src, uint64 src, uint off, uint n)
+{
+  if((user_src != 0 && user_src != 1) ||
+     n > 0x7fffffffU || off + n < off)
+    return -1;
+  if(vn->ops->write_at == 0)
+    return -1;
+  if(n == 0)
+    return 0;
+  return vn->ops->write_at(vn->data, user_src, src, off, n);
+}
+
+int
+vfs_truncate_zero(struct vnode *vn)
+{
+  if(vn->ops->truncate_zero == 0)
+    return -1;
+  return vn->ops->truncate_zero(vn->data);
+}
