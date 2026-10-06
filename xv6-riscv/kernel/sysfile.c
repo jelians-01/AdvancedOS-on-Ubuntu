@@ -244,6 +244,7 @@ bad:
   return -1;
 }
 
+// Create directories and devices; regular files use the VFS backend.
 static struct inode*
 create(char *path, short type, short major, short minor)
 {
@@ -258,8 +259,6 @@ create(char *path, short type, short major, short minor)
   if((ip = dirlookup(dp, name, 0)) != 0){
     iunlockput(dp);
     ilock(ip);
-    if(type == T_FILE && (ip->type == T_FILE || ip->type == T_DEVICE))
-      return ip;
     iunlockput(ip);
     return 0;
   }
@@ -309,35 +308,27 @@ sys_open(void)
   char path[MAXPATH];
   int fd, omode;
   struct file *f;
-  struct inode *ip = 0;
+  struct inode *ip;
   int n;
 
   argint(1, &omode);
   if((n = argstr(0, path, MAXPATH)) < 0)
     return -1;
 
-  // The VFS walker may release nodes in its own native transactions.
-  if(!(omode & O_CREATE)){
+  // VFS lookup/create and reference release own their transactions.
+  if(omode & O_CREATE)
+    ip = vfs_xv6_create_file(path);
+  else
     ip = vfs_xv6_namei(path);
-    if(ip == 0)
-      return -1;
-  }
+  if(ip == 0)
+    return -1;
 
   begin_op();
-
-  if(omode & O_CREATE){
-    ip = create(path, T_FILE, 0, 0);
-    if(ip == 0){
-      end_op();
-      return -1;
-    }
-  } else {
-    ilock(ip);
-    if(ip->type == T_DIR && omode != O_RDONLY){
-      iunlockput(ip);
-      end_op();
-      return -1;
-    }
+  ilock(ip);
+  if(ip->type == T_DIR && omode != O_RDONLY){
+    iunlockput(ip);
+    end_op();
+    return -1;
   }
 
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){

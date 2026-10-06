@@ -21,6 +21,10 @@ struct vnode_ops {
   // Success: 0 and one unlocked backend reference in *out_node.
   // Failure: -1 and *out_node == 0. The child uses this same ops table.
   int (*lookup)(void *dir, const char *name, uint len, void **out_node);
+  // Same reference/output rules as lookup; lock the find-or-create operation.
+  // Create only regular files. Native may return an existing device for rev5.
+  // No outer lock/transaction; backend exits its locks/transaction on return.
+  int (*create_file)(void *dir, const char *name, uint len, void **out_node);
 };
 
 // Caller owns one backend reference and holds no node lock or transaction.
@@ -43,5 +47,9 @@ void *vfs_node_data(struct vnode *vn, const struct vnode_ops *ops);
 // Native-only transition for open; caller eventually iput()s in a transaction.
 // Enter without a node lock or outer native transaction.
 struct inode *vfs_xv6_namei(const char *path);
+
+// Find the parent via VFS, then create/open a regular file in that directory.
+// Same ownership/entry rules as vfs_xv6_namei; existing devices are compatible.
+struct inode *vfs_xv6_create_file(const char *path);
 
 #endif

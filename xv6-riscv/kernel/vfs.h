@@ -54,4 +54,18 @@ struct vnode *vfs_lookup(struct vnode *dir, const char *name, uint len);
 // No node lock or outer native transaction; no mount traversal yet.
 struct vnode *vfs_walk(struct vnode *start, const char *path);
 
+// Like vfs_walk, but stop at the parent directory of the final component.
+// On success, *name borrows a slice of path, *len is its full byte length,
+// and the caller owns one unlocked parent reference. Keep path alive.
+// On failure return 0 and clear both outputs. Empty/all-slash paths fail.
+// name and len must be non-null. No node lock or outer transaction.
+struct vnode *vfs_walk_parent(struct vnode *start, const char *path,
+                              const char **name, uint *len);
+
+// Borrow dir; atomically find or create a regular file under that directory.
+// Return one unlocked vnode reference or 0. Does not truncate existing files.
+// Native compatibility: an existing device may also be returned.
+// No node lock or outer transaction; the backend owns locks and transactions.
+struct vnode *vfs_create_file(struct vnode *dir, const char *name, uint len);
+
 #endif

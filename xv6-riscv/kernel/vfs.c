@@ -2,6 +2,7 @@
 #include "riscv.h"
 #include "defs.h"
 #include "param.h"
+#include "stat.h"
 #include "spinlock.h"
 #include "vfs.h"
 #include "vfs_backend.h"
@@ -137,18 +138,27 @@ vfs_node_data(struct vnode *vn, const struct vnode_ops *ops)
   return vn->ops == ops ? vn->data : 0;
 }
 
+static int
+valid_component(const char *name, uint len)
+{
+  uint i;
+
+  if(name == 0 || len == 0 || len >= MAXPATH)
+    return 0;
+  for(i = 0; i < len; i++)
+    if(name[i] == '/' || name[i] == 0)
+      return 0;
+  return 1;
+}
+
 struct vnode*
 vfs_lookup(struct vnode *dir, const char *name, uint len)
 {
   void *data = 0;
   struct vnode *vn;
-  uint i;
 
-  if(name == 0 || len == 0 || len >= MAXPATH || dir->ops->lookup == 0)
+  if(!valid_component(name, len) || dir->ops->lookup == 0)
     return 0;
-  for(i = 0; i < len; i++)
-    if(name[i] == '/' || name[i] == 0)
-      return 0;
   if(dir->ops->lookup(dir->data, name, len, &data) < 0 || data == 0)
     return 0;
   vn = vfs_node_get(dir->ops, data);
@@ -158,7 +168,23 @@ vfs_lookup(struct vnode *dir, const char *name, uint len)
 }
 
 struct vnode*
-vfs_walk(struct vnode *start, const char *path)
+vfs_create_file(struct vnode *dir, const char *name, uint len)
+{
+  void *data = 0;
+  struct vnode *vn;
+
+  if(!valid_component(name, len) || dir->ops->create_file == 0)
+    return 0;
+  if(dir->ops->create_file(dir->data, name, len, &data) < 0 || data == 0)
+    return 0;
+  vn = vfs_node_get(dir->ops, data);
+  if(vn == 0)
+    dir->ops->release(data);
+  return vn;
+}
+
+static struct vnode*
+vfs_walk_path(struct vnode *start, const char *path, const char **last, uint *lastlen)
 {
   struct vnode *vn, *next;
   const char *name;
@@ -175,16 +201,54 @@ vfs_walk(struct vnode *start, const char *path)
   for(;;){
     while(*path == '/')
       path++;
-    if(*path == 0)
+    if(*path == 0){
+      if(last){
+        vfs_put(vn);
+        return 0;
+      }
       return vn;
+    }
     name = path;
     while(*path != 0 && *path != '/')
       path++;
+    len = path - name;
+    while(*path == '/')
+      path++;
+    if(last && *path == 0){
+      struct stat st;
+      int r;
+
+      vfs_lock(vn);
+      r = vfs_getattr(vn, &st);
+      vfs_unlock(vn);
+      if(r < 0 || st.type != T_DIR){
+        vfs_put(vn);
+        return 0;
+      }
+      *last = name;
+      *lastlen = len;
+      return vn;
+    }
     // Pass the full component; name limits belong to the backend.
-    next = vfs_lookup(vn, name, path - name);
+    next = vfs_lookup(vn, name, len);
     vfs_put(vn);
     if(next == 0)
       return 0;
     vn = next;
   }
+}
+
+struct vnode*
+vfs_walk(struct vnode *start, const char *path)
+{
+  return vfs_walk_path(start, path, 0, 0);
+}
+
+struct vnode*
+vfs_walk_parent(struct vnode *start, const char *path,
+                const char **name, uint *len)
+{
+  *name = 0;
+  *len = 0;
+  return vfs_walk_path(start, path, name, len);
 }
