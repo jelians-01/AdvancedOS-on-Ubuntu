@@ -139,6 +139,7 @@ UPROGS=\
 	$U/_stressfs\
 	$U/_usertests\
 	$U/_vfspath\
+	$U/_vfsexec\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\

@@ -416,8 +416,8 @@ native_inode(struct vnode *vn)
   return ip;
 }
 
-struct inode*
-vfs_xv6_namei(const char *path)
+struct vnode*
+vfs_xv6_lookup_path(const char *path)
 {
   struct vnode *start, *vn;
 
@@ -426,7 +426,13 @@ vfs_xv6_namei(const char *path)
     return 0;
   vn = vfs_walk(start, path);
   vfs_put(start);
-  return native_inode(vn);
+  return vn;
+}
+
+struct inode*
+vfs_xv6_namei(const char *path)
+{
+  return native_inode(vfs_xv6_lookup_path(path));
 }
 
 static struct vnode*

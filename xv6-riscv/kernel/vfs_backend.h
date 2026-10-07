@@ -57,6 +57,11 @@ struct vnode *vfs_xv6_get(struct inode *ip);
 // Caller must keep vn referenced while using the returned pointer.
 void *vfs_node_data(struct vnode *vn, const struct vnode_ops *ops);
 
+// Resolve an absolute/relative path using the native root/inode cwd.
+// Return one unlocked vnode reference or 0; caller eventually vfs_put()s.
+// No node lock or outer native transaction. Temporary until cwd/mount migration.
+struct vnode *vfs_xv6_lookup_path(const char *path);
+
 // Resolve via VFS components, then return one unlocked inode reference.
 // Native-only transition for open; caller eventually iput()s in a transaction.
 // Enter without a node lock or outer native transaction.
