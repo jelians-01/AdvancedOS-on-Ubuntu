@@ -25,6 +25,10 @@ struct vnode_ops {
   // Create only regular files. Native may return an existing device for rev5.
   // No outer lock/transaction; backend exits its locks/transaction on return.
   int (*create_file)(void *dir, const char *name, uint len, void **out_node);
+  // Borrow dir, no outer lock/transaction; return 0/-1, no output reference.
+  // Existing names fail. Release all temporary nodes before returning.
+  int (*mkdir)(void *dir, const char *name, uint len);
+  int (*mknod)(void *dir, const char *name, uint len, int major, int minor);
 };
 
 // Caller owns one backend reference and holds no node lock or transaction.
@@ -51,5 +55,10 @@ struct inode *vfs_xv6_namei(const char *path);
 // Find the parent via VFS, then create/open a regular file in that directory.
 // Same ownership/entry rules as vfs_xv6_namei; existing devices are compatible.
 struct inode *vfs_xv6_create_file(const char *path);
+
+// Native-only path bridges for mkdir/mknod. No outer lock/transaction.
+// Return 0/-1; no reference is transferred to the caller.
+int vfs_xv6_mkdir(const char *path);
+int vfs_xv6_mknod(const char *path, int major, int minor);
 
 #endif

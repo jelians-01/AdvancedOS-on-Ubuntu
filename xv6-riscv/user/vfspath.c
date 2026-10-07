@@ -1,5 +1,6 @@
 #include "kernel/types.h"
 #include "kernel/stat.h"
+#include "kernel/param.h"
 #include "kernel/fcntl.h"
 #include "user/user.h"
 
@@ -145,6 +146,124 @@ check_concurrent_create(void)
 }
 
 static void
+check_node_failure(const char *path)
+{
+  if(mkdir(path) != -1 || mknod(path, 1, 0) != -1)
+    fail("mkdir/mknod accepted an existing or invalid path");
+}
+
+static void
+check_concurrent_nodes(int device)
+{
+  const char *path = device ? "vfspath.tmp/racedev" : "vfspath.tmp/racedir";
+  struct stat before, after, node;
+  int gate[2], status, successes = 0;
+  char byte;
+
+  if(stat("vfspath.tmp", &before) < 0 || pipe(gate) < 0)
+    fail("node race setup");
+  for(int i = 0; i < 4; i++){
+    int pid = fork();
+    if(pid < 0)
+      fail("node race fork");
+    if(pid == 0){
+      int r;
+      close(gate[1]);
+      if(read(gate[0], &byte, 1) != 1)
+        exit(2);
+      close(gate[0]);
+      r = device ? mknod(path, 1, 0) : mkdir(path);
+      exit(r == 0 ? 0 : (r == -1 ? 1 : 2));
+    }
+  }
+  close(gate[0]);
+  if(write(gate[1], "xxxx", 4) != 4)
+    fail("node race start");
+  close(gate[1]);
+  for(int i = 0; i < 4; i++){
+    if(wait(&status) < 0 || (status != 0 && status != 1))
+      fail("node race child");
+    if(status == 0)
+      successes++;
+  }
+  if(successes != 1 || stat(path, &node) < 0 ||
+     node.type != (device ? T_DEVICE : T_DIR) ||
+     stat("vfspath.tmp", &after) < 0 ||
+     after.nlink != before.nlink + (device ? 0 : 1))
+    fail("node race result");
+  if(!device)
+    check_same_dir("vfspath.tmp/racedir/..", "vfspath.tmp");
+  if(unlink(path) < 0 || stat("vfspath.tmp", &after) < 0 ||
+     after.nlink != before.nlink)
+    fail("node race cleanup");
+}
+
+static void
+check_directories(void)
+{
+  struct stat before, after, tree;
+  const char *bad[] = {
+    "", "/", "////", ".", "..", "vfspath.tmp/sub",
+    "vfspath.tmp/data", "vfspath.tmp/sub/.", "vfspath.tmp/sub/..",
+    "vfspath.tmp/missing/child", "vfspath.tmp/data/child",
+  };
+  int fd;
+
+  if(stat("vfspath.tmp", &before) < 0)
+    fail("parent stat");
+  for(uint i = 0; i < sizeof(bad)/sizeof(bad[0]); i++)
+    check_node_failure(bad[i]);
+
+  if(mkdir("///vfspath.tmp//tree///") < 0 ||
+     stat("vfspath.tmp", &after) < 0 || after.nlink != before.nlink + 1 ||
+     stat("vfspath.tmp/tree", &tree) < 0 || tree.type != T_DIR ||
+     tree.nlink != 1)
+    fail("mkdir parent link count");
+  check_same_dir("vfspath.tmp/tree", "vfspath.tmp/tree/.");
+  check_same_dir("vfspath.tmp/tree/..", "vfspath.tmp");
+  if(chdir("vfspath.tmp/tree") < 0 || mkdir("./leaf///") < 0)
+    fail("relative mkdir");
+  check_same_dir("leaf/..", ".");
+  if(chdir("/") < 0 || stat("vfspath.tmp/tree", &after) < 0 ||
+     after.nlink != tree.nlink + 1)
+    fail("nested directory link count");
+  if(unlink("vfspath.tmp/tree") != -1)
+    fail("removed nonempty directory");
+  if(unlink("vfspath.tmp/tree/leaf") < 0 ||
+     stat("vfspath.tmp/tree", &after) < 0 || after.nlink != tree.nlink ||
+     unlink("vfspath.tmp/tree") < 0)
+    fail("directory cleanup");
+
+  if(mkdir("vfspath.tmp/abcdefghijklmnO") < 0)
+    fail("long directory name");
+  check_same_dir("vfspath.tmp/abcdefghijklmnO", "vfspath.tmp/abcdefghijklmn");
+  check_node_failure("vfspath.tmp/abcdefghijklmnSuffix");
+  if(unlink("vfspath.tmp/abcdefghijklmn") < 0)
+    fail("long directory cleanup");
+
+  if(mknod("vfspath.tmp/testdev", 1, 0) < 0)
+    fail("mknod testdev");
+  check_node_failure("vfspath.tmp/testdev");
+  if(stat("vfspath.tmp/testdev", &after) < 0 || after.type != T_DEVICE ||
+     unlink("vfspath.tmp/testdev") < 0)
+    fail("device type or cleanup");
+  // rev5 permits creating this inode; open rejects its invalid stored major.
+  if(mknod("vfspath.tmp/baddev", NDEV, 0) < 0)
+    fail("mknod invalid-major compatibility");
+  fd = open("vfspath.tmp/baddev", O_RDONLY);
+  if(fd >= 0){
+    close(fd);
+    fail("open invalid major");
+  }
+  if(unlink("vfspath.tmp/baddev") < 0 ||
+     stat("vfspath.tmp", &after) < 0 || after.nlink != before.nlink)
+    fail("parent link count after cleanup");
+
+  check_concurrent_nodes(0);
+  check_concurrent_nodes(1);
+}
+
+static void
 check_creation(struct stat *data, struct stat *longname)
 {
   struct stat before, after;
@@ -197,6 +316,7 @@ check_creation(struct stat *data, struct stat *longname)
      unlink("/vfspath.tmp/gone") < 0)
     fail("removed parent fixture");
   check_create_failure("lost");
+  check_node_failure("lostnode");
   if(chdir("/") < 0)
     fail("leave removed parent");
 }
@@ -204,7 +324,7 @@ check_creation(struct stat *data, struct stat *longname)
 int
 main(void)
 {
-  struct stat data, longname, cycle;
+  struct stat data, longname, cycle, parent_before, parent_after;
   const char *paths[] = {
     "vfspath.tmp/data",
     "/vfspath.tmp/data",
@@ -250,8 +370,11 @@ main(void)
   if(chdir("/") < 0)
     fail("chdir back");
 
+  check_directories();
   check_creation(&data, &longname);
 
+  if(stat("vfspath.tmp", &parent_before) < 0)
+    fail("parent before cycles");
   // Exceed the vnode table size to expose leaked traversal references.
   for(int i = 0; i < 200; i++){
     check_missing("vfspath.tmp/sub/missing");
@@ -264,8 +387,16 @@ main(void)
     check_file("vfspath.tmp/sub/../cycle", &cycle);
     if(unlink("vfspath.tmp/cycle") < 0)
       fail("cycle unlink");
+    if(mkdir("vfspath.tmp/cycledir") < 0 ||
+       mknod("vfspath.tmp/cycledev", 1, 0) < 0 ||
+       unlink("vfspath.tmp/cycledev") < 0 ||
+       unlink("vfspath.tmp/cycledir") < 0)
+      fail("directory/device cycle");
   }
 
+  if(stat("vfspath.tmp", &parent_after) < 0 ||
+     parent_after.nlink != parent_before.nlink)
+    fail("parent links leaked during cycles");
   if(unlink("vfspath.tmp/data") < 0 ||
      unlink("vfspath.tmp/12345678901234") < 0 ||
      unlink("vfspath.tmp/sub") < 0 || unlink("vfspath.tmp") < 0)

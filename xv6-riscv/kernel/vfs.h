@@ -68,4 +68,11 @@ struct vnode *vfs_walk_parent(struct vnode *start, const char *path,
 // No node lock or outer transaction; the backend owns locks and transactions.
 struct vnode *vfs_create_file(struct vnode *dir, const char *name, uint len);
 
+// Borrow dir; name is one full component. Existing names fail.
+// Return 0 on success or -1 on error; no new node reference is returned.
+// No node lock or outer transaction; backend owns locking and transactions.
+int vfs_mkdir(struct vnode *dir, const char *name, uint len);
+int vfs_mknod(struct vnode *dir, const char *name, uint len,
+              int major, int minor);
+
 #endif

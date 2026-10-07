@@ -183,6 +183,22 @@ vfs_create_file(struct vnode *dir, const char *name, uint len)
   return vn;
 }
 
+int
+vfs_mkdir(struct vnode *dir, const char *name, uint len)
+{
+  if(!valid_component(name, len) || dir->ops->mkdir == 0)
+    return -1;
+  return dir->ops->mkdir(dir->data, name, len);
+}
+
+int
+vfs_mknod(struct vnode *dir, const char *name, uint len, int major, int minor)
+{
+  if(!valid_component(name, len) || dir->ops->mknod == 0)
+    return -1;
+  return dir->ops->mknod(dir->data, name, len, major, minor);
+}
+
 static struct vnode*
 vfs_walk_path(struct vnode *start, const char *path, const char **last, uint *lastlen)
 {

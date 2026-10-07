@@ -244,64 +244,6 @@ bad:
   return -1;
 }
 
-// Create directories and devices; regular files use the VFS backend.
-static struct inode*
-create(char *path, short type, short major, short minor)
-{
-  struct inode *ip, *dp;
-  char name[DIRSIZ];
-
-  if((dp = nameiparent(path, name)) == 0)
-    return 0;
-
-  ilock(dp);
-
-  if((ip = dirlookup(dp, name, 0)) != 0){
-    iunlockput(dp);
-    ilock(ip);
-    iunlockput(ip);
-    return 0;
-  }
-
-  if((ip = ialloc(dp->dev, type)) == 0){
-    iunlockput(dp);
-    return 0;
-  }
-
-  ilock(ip);
-  ip->major = major;
-  ip->minor = minor;
-  ip->nlink = 1;
-  iupdate(ip);
-
-  if(type == T_DIR){  // Create . and .. entries.
-    // No ip->nlink++ for ".": avoid cyclic ref count.
-    if(dirlink(ip, ".", ip->inum) < 0 || dirlink(ip, "..", dp->inum) < 0)
-      goto fail;
-  }
-
-  if(dirlink(dp, name, ip->inum) < 0)
-    goto fail;
-
-  if(type == T_DIR){
-    // now that success is guaranteed:
-    dp->nlink++;  // for ".."
-    iupdate(dp);
-  }
-
-  iunlockput(dp);
-
-  return ip;
-
- fail:
-  // something went wrong. de-allocate ip.
-  ip->nlink = 0;
-  iupdate(ip);
-  iunlockput(ip);
-  iunlockput(dp);
-  return 0;
-}
-
 uint64
 sys_open(void)
 {
@@ -382,36 +324,23 @@ uint64
 sys_mkdir(void)
 {
   char path[MAXPATH];
-  struct inode *ip;
 
-  begin_op();
-  if(argstr(0, path, MAXPATH) < 0 || (ip = create(path, T_DIR, 0, 0)) == 0){
-    end_op();
+  if(argstr(0, path, MAXPATH) < 0)
     return -1;
-  }
-  iunlockput(ip);
-  end_op();
-  return 0;
+  return vfs_xv6_mkdir(path);
 }
 
 uint64
 sys_mknod(void)
 {
-  struct inode *ip;
   char path[MAXPATH];
   int major, minor;
 
-  begin_op();
   argint(1, &major);
   argint(2, &minor);
-  if((argstr(0, path, MAXPATH)) < 0 ||
-     (ip = create(path, T_DEVICE, major, minor)) == 0){
-    end_op();
+  if(argstr(0, path, MAXPATH) < 0)
     return -1;
-  }
-  iunlockput(ip);
-  end_op();
-  return 0;
+  return vfs_xv6_mknod(path, major, minor);
 }
 
 uint64

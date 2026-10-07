@@ -132,7 +132,8 @@ native_lookup(void *data, const char *name, uint len, void **out_node)
 }
 
 static int
-native_create_file(void *data, const char *name, uint len, void **out_node)
+native_create_node(void *data, const char *name, uint len,
+                   short type, short major, short minor, void **out_node)
 {
   struct inode *dp = data, *ip;
   char native_name[DIRSIZ];
@@ -152,7 +153,7 @@ native_create_file(void *data, const char *name, uint len, void **out_node)
     // "." or ".." may alias dp or an ancestor; unlock dp first.
     iunlock(dp);
     ilock(ip);
-    if(ip->type == T_FILE || ip->type == T_DEVICE){
+    if(type == T_FILE && (ip->type == T_FILE || ip->type == T_DEVICE)){
       iunlock(ip);
       end_op();
       *out_node = ip;
@@ -164,18 +165,24 @@ native_create_file(void *data, const char *name, uint len, void **out_node)
   }
 
   // Keep dp locked from the absence check through publishing the new entry.
-  if((ip = ialloc(dp->dev, T_FILE)) == 0)
+  if((ip = ialloc(dp->dev, type)) == 0)
     goto bad_parent;
   ilock(ip);
-  ip->major = 0;
-  ip->minor = 0;
+  ip->major = major;
+  ip->minor = minor;
   ip->nlink = 1;
   iupdate(ip);
-  if(dirlink(dp, native_name, ip->inum) < 0){
-    ip->nlink = 0;
-    iupdate(ip);
-    iunlockput(ip);
-    goto bad_parent;
+  if(type == T_DIR){
+    // Do not count "." in nlink; count the child's ".." in its parent.
+    if(dirlink(ip, ".", ip->inum) < 0 || dirlink(ip, "..", dp->inum) < 0)
+      goto bad_node;
+  }
+  if(dirlink(dp, native_name, ip->inum) < 0)
+    goto bad_node;
+  if(type == T_DIR){
+    // Only increment the parent's link count after publication succeeds.
+    dp->nlink++;
+    iupdate(dp);
   }
   iunlock(ip);
   iunlock(dp);
@@ -183,10 +190,43 @@ native_create_file(void *data, const char *name, uint len, void **out_node)
   *out_node = ip;
   return 0;
 
+bad_node:
+  ip->nlink = 0;
+  iupdate(ip);
+  iunlockput(ip);
 bad_parent:
   iunlock(dp);
   end_op();
   return -1;
+}
+
+static int
+native_create_file(void *data, const char *name, uint len, void **out_node)
+{
+  return native_create_node(data, name, len, T_FILE, 0, 0, out_node);
+}
+
+static int
+native_mkdir(void *data, const char *name, uint len)
+{
+  void *node;
+
+  if(native_create_node(data, name, len, T_DIR, 0, 0, &node) < 0)
+    return -1;
+  native_release(node);
+  return 0;
+}
+
+static int
+native_mknod(void *data, const char *name, uint len, int major, int minor)
+{
+  void *node;
+
+  // Preserve rev5's short device fields; open validates the stored major.
+  if(native_create_node(data, name, len, T_DEVICE, major, minor, &node) < 0)
+    return -1;
+  native_release(node);
+  return 0;
 }
 
 static const struct vnode_ops native_ops = {
@@ -199,6 +239,8 @@ static const struct vnode_ops native_ops = {
   .truncate_zero = native_truncate_zero,
   .lookup = native_lookup,
   .create_file = native_create_file,
+  .mkdir = native_mkdir,
+  .mknod = native_mknod,
 };
 
 struct vnode*
@@ -268,21 +310,62 @@ vfs_xv6_namei(const char *path)
   return native_inode(vn);
 }
 
-struct inode*
-vfs_xv6_create_file(const char *path)
+static struct vnode*
+native_parent(const char *path, const char **name, uint *len)
 {
-  struct vnode *start, *parent, *vn;
-  const char *name;
-  uint len;
+  struct vnode *start, *parent;
 
   start = native_start(path);
   if(start == 0)
     return 0;
-  parent = vfs_walk_parent(start, path, &name, &len);
+  parent = vfs_walk_parent(start, path, name, len);
   vfs_put(start);
+  return parent;
+}
+
+struct inode*
+vfs_xv6_create_file(const char *path)
+{
+  struct vnode *parent, *vn;
+  const char *name;
+  uint len;
+
+  parent = native_parent(path, &name, &len);
   if(parent == 0)
     return 0;
   vn = vfs_create_file(parent, name, len);
   vfs_put(parent);
   return native_inode(vn);
+}
+
+int
+vfs_xv6_mkdir(const char *path)
+{
+  struct vnode *parent;
+  const char *name;
+  uint len;
+  int r;
+
+  parent = native_parent(path, &name, &len);
+  if(parent == 0)
+    return -1;
+  r = vfs_mkdir(parent, name, len);
+  vfs_put(parent);
+  return r;
+}
+
+int
+vfs_xv6_mknod(const char *path, int major, int minor)
+{
+  struct vnode *parent;
+  const char *name;
+  uint len;
+  int r;
+
+  parent = native_parent(path, &name, &len);
+  if(parent == 0)
+    return -1;
+  r = vfs_mknod(parent, name, len, major, minor);
+  vfs_put(parent);
+  return r;
 }
