@@ -75,4 +75,15 @@ int vfs_mkdir(struct vnode *dir, const char *name, uint len);
 int vfs_mknod(struct vnode *dir, const char *name, uint len,
               int major, int minor);
 
+// Borrow dir and target; one full destination component, existing names fail.
+// Return 0/-1. No outer node locks/transaction; backend owns both.
+// Only same-instance, non-directory hard links are supported.
+int vfs_link(struct vnode *dir, const char *name, uint len,
+             struct vnode *target);
+
+// Borrow dir; remove one name, including an empty directory.
+// Reject "."/".."; open references keep an unlinked node alive.
+// Return 0/-1; no outer node lock or transaction.
+int vfs_unlink(struct vnode *dir, const char *name, uint len);
+
 #endif

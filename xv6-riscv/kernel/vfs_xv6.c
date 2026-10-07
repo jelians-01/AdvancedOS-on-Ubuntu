@@ -229,6 +229,122 @@ native_mknod(void *data, const char *name, uint len, int major, int minor)
   return 0;
 }
 
+static int
+native_same_fs(void *dir, void *target)
+{
+  struct inode *dp = dir, *ip = target;
+
+  // The native backend has one filesystem identity per device, no mounts yet.
+  return dp->dev == ip->dev;
+}
+
+static int
+native_link(void *dir, const char *name, uint len, void *target)
+{
+  struct inode *dp = dir, *ip = target;
+  char native_name[DIRSIZ];
+
+  if(len == 0 || !native_same_fs(dir, target))
+    return -1;
+  native_component(native_name, name, len);
+
+  begin_op();
+  // Reserve the link before taking the parent lock. Never hold the target
+  // lock while waiting for dp: unlink locks parent then child.
+  ilock(ip);
+  if(ip->type == T_DIR || ip->nlink < 1 || ip->nlink == 32767){
+    iunlock(ip);
+    end_op();
+    return -1;
+  }
+  ip->nlink++;
+  iupdate(ip);
+  iunlock(ip);
+
+  ilock(dp);
+  if(dp->type != T_DIR || dp->nlink == 0 ||
+     dirlink(dp, native_name, ip->inum) < 0){
+    iunlock(dp);
+    // Roll back within this transaction, without holding the parent lock.
+    ilock(ip);
+    ip->nlink--;
+    iupdate(ip);
+    iunlock(ip);
+    end_op();
+    return -1;
+  }
+  iunlock(dp);
+  end_op();
+  return 0;
+}
+
+// Caller holds the directory lock; preserve the native directory layout.
+static int
+native_isdirempty(struct inode *dp)
+{
+  uint off;
+  struct dirent de;
+
+  for(off = 2*sizeof(de); off < dp->size; off += sizeof(de)){
+    if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+      panic("native_isdirempty: readi");
+    if(de.inum != 0)
+      return 0;
+  }
+  return 1;
+}
+
+static int
+native_unlink(void *dir, const char *name, uint len)
+{
+  struct inode *dp = dir, *ip;
+  struct dirent de;
+  char native_name[DIRSIZ];
+  uint off;
+
+  if(len == 0)
+    return -1;
+  native_component(native_name, name, len);
+  // Reject aliases before locking a child; "." would lock dp twice.
+  if(namecmp(native_name, ".") == 0 || namecmp(native_name, "..") == 0)
+    return -1;
+
+  begin_op();
+  ilock(dp);
+  if(dp->type != T_DIR || dp->nlink == 0)
+    goto bad_parent;
+  if((ip = dirlookup(dp, native_name, &off)) == 0)
+    goto bad_parent;
+  // Native tree order: parent before child. Directory hard links are forbidden.
+  ilock(ip);
+  if(ip->nlink < 1)
+    panic("native_unlink: nlink");
+  if(ip->type == T_DIR && !native_isdirempty(ip)){
+    iunlockput(ip);
+    goto bad_parent;
+  }
+
+  memset(&de, 0, sizeof(de));
+  if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+    panic("native_unlink: writei");
+  if(ip->type == T_DIR){
+    dp->nlink--;
+    iupdate(dp);
+  }
+  iunlock(dp);
+  ip->nlink--;
+  iupdate(ip);
+  // Only the lookup's reference is consumed. Open files/cwd retain theirs.
+  iunlockput(ip);
+  end_op();
+  return 0;
+
+bad_parent:
+  iunlock(dp);
+  end_op();
+  return -1;
+}
+
 static const struct vnode_ops native_ops = {
   .lock = native_lock,
   .unlock = native_unlock,
@@ -241,6 +357,9 @@ static const struct vnode_ops native_ops = {
   .create_file = native_create_file,
   .mkdir = native_mkdir,
   .mknod = native_mknod,
+  .same_fs = native_same_fs,
+  .link = native_link,
+  .unlink = native_unlink,
 };
 
 struct vnode*
@@ -366,6 +485,46 @@ vfs_xv6_mknod(const char *path, int major, int minor)
   if(parent == 0)
     return -1;
   r = vfs_mknod(parent, name, len, major, minor);
+  vfs_put(parent);
+  return r;
+}
+
+int
+vfs_xv6_link(const char *oldpath, const char *newpath)
+{
+  struct vnode *start, *target, *parent;
+  const char *name;
+  uint len;
+  int r = -1;
+
+  start = native_start(oldpath);
+  if(start == 0)
+    return -1;
+  target = vfs_walk(start, oldpath);
+  vfs_put(start);
+  if(target == 0)
+    return -1;
+  parent = native_parent(newpath, &name, &len);
+  if(parent){
+    r = vfs_link(parent, name, len, target);
+    vfs_put(parent);
+  }
+  vfs_put(target);
+  return r;
+}
+
+int
+vfs_xv6_unlink(const char *path)
+{
+  struct vnode *parent;
+  const char *name;
+  uint len;
+  int r;
+
+  parent = native_parent(path, &name, &len);
+  if(parent == 0)
+    return -1;
+  r = vfs_unlink(parent, name, len);
   vfs_put(parent);
   return r;
 }

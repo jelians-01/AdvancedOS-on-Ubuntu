@@ -29,6 +29,16 @@ struct vnode_ops {
   // Existing names fail. Release all temporary nodes before returning.
   int (*mkdir)(void *dir, const char *name, uint len);
   int (*mknod)(void *dir, const char *name, uint len, int major, int minor);
+  // Borrow both nodes, no outer locks/transaction.
+  // same_fs: return exactly 1 iff both nodes belong to the same instance.
+  // Inspect only immutable identity; required for link (same ops is not enough).
+  int (*same_fs)(void *dir, void *target);
+  // Non-directory target; reject dead parents/targets and link-count overflow.
+  // Return 0/-1, no output references; undo a reserved link on failure.
+  int (*link)(void *dir, const char *name, uint len, void *target);
+  // Borrow dir; reject "."/".." and nonempty directories. Return 0/-1.
+  // Release internal lookup references; do not consume the borrowed parent.
+  int (*unlink)(void *dir, const char *name, uint len);
 };
 
 // Caller owns one backend reference and holds no node lock or transaction.
@@ -60,5 +70,10 @@ struct inode *vfs_xv6_create_file(const char *path);
 // Return 0/-1; no reference is transferred to the caller.
 int vfs_xv6_mkdir(const char *path);
 int vfs_xv6_mknod(const char *path, int major, int minor);
+
+// Native-only link/unlink path bridges; no outer locks/transaction.
+// Return 0/-1; resolve and release all temporary VFS references internally.
+int vfs_xv6_link(const char *oldpath, const char *newpath);
+int vfs_xv6_unlink(const char *path);
 
 #endif

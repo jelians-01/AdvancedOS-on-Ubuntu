@@ -263,6 +263,222 @@ check_directories(void)
   check_concurrent_nodes(1);
 }
 
+
+static void
+check_link_failure(const char *old, const char *new)
+{
+  struct stat before, after;
+
+  if(stat(old, &before) < 0 || link(old, new) != -1 ||
+     stat(old, &after) < 0 || after.nlink != before.nlink ||
+     after.ino != before.ino || after.size != before.size)
+    fail("failed link changed source");
+}
+
+static void
+check_concurrent_links(void)
+{
+  const char *src = "vfspath.tmp/linksrc";
+  const char *dst = "vfspath.tmp/linkrace";
+  struct stat st, linked;
+  int gate[2], status;
+  char byte;
+
+  create_file(src);
+  // First four links race for one name, then four unlinks race to remove it.
+  for(int remove = 0; remove < 2; remove++){
+    int successes = 0;
+    if(pipe(gate) < 0)
+      fail("link race pipe");
+    for(int i = 0; i < 4; i++){
+      int pid = fork();
+      if(pid < 0)
+        fail("link race fork");
+      if(pid == 0){
+        int r;
+        close(gate[1]);
+        if(read(gate[0], &byte, 1) != 1)
+          exit(2);
+        close(gate[0]);
+        r = remove ? unlink(dst) : link(src, dst);
+        exit(r == 0 ? 0 : (r == -1 ? 1 : 2));
+      }
+    }
+    close(gate[0]);
+    if(write(gate[1], "xxxx", 4) != 4)
+      fail("link race start");
+    close(gate[1]);
+    for(int i = 0; i < 4; i++){
+      if(wait(&status) < 0 || (status != 0 && status != 1))
+        fail("link race child");
+      successes += status == 0;
+    }
+    if(successes != 1 || stat(src, &st) < 0 ||
+       st.nlink != (remove ? 1 : 2))
+      fail("link race count");
+    if(!remove){
+      if(stat(dst, &linked) < 0 || linked.dev != st.dev ||
+         linked.ino != st.ino || linked.nlink != 2)
+        fail("link race identity");
+      check_file(dst, &st);
+    } else {
+      check_missing(dst);
+    }
+  }
+  if(unlink(src) < 0)
+    fail("link race cleanup");
+}
+
+static void
+check_last_unlink_race(void)
+{
+  const char *src = "vfspath.tmp/lastsrc";
+  const char *dst = "vfspath.tmp/lastdst";
+  struct stat before, after;
+  int gate[2], fd, pid, status;
+  char byte;
+
+  // Hold the old inode open while racing its last name against a new link.
+  for(int i = 0; i < 16; i++){
+    create_file(src);
+    fd = open(src, O_RDONLY);
+    if(fd < 0 || fstat(fd, &before) < 0 || pipe(gate) < 0)
+      fail("last unlink setup");
+    pid = fork();
+    if(pid < 0)
+      fail("last unlink fork");
+    if(pid == 0){
+      int r;
+      close(fd);
+      close(gate[1]);
+      if(read(gate[0], &byte, 1) != 1)
+        exit(2);
+      close(gate[0]);
+      r = link(src, dst);
+      exit(r == 0 ? 0 : (r == -1 ? 1 : 2));
+    }
+    close(gate[0]);
+    if(write(gate[1], "x", 1) != 1)
+      fail("last unlink start");
+    close(gate[1]);
+    if(unlink(src) < 0 || wait(&status) < 0 ||
+       (status != 0 && status != 1))
+      fail("last unlink child");
+    check_missing(src);
+    if(fstat(fd, &after) < 0 || after.ino != before.ino ||
+       after.nlink != (status == 0 ? 1 : 0))
+      fail("last unlink count");
+    if(status == 0){
+      check_file(dst, &before);
+      if(unlink(dst) < 0)
+        fail("last link cleanup");
+    } else {
+      check_missing(dst);
+    }
+    if(fstat(fd, &after) < 0 || after.nlink != 0)
+      fail("last unlink final count");
+    close(fd);
+  }
+}
+
+static void
+check_links(void)
+{
+  const char *src = "vfspath.tmp/linkfile";
+  const char *dst = "vfspath.tmp/sub/alias";
+  const char *bad[] = {
+    "", "/", "////", ".", "..", "vfspath.tmp/sub/.",
+    "vfspath.tmp/sub/..", "vfspath.tmp/missing/name",
+    "vfspath.tmp/data/name", "vfspath.tmp/sub", "vfspath.tmp/data",
+  };
+  struct stat original, st, fresh;
+  char buf[sizeof(payload)+1];
+  int fd, rd, shared, pid, status;
+
+  create_file(src);
+  if(stat(src, &original) < 0 || original.nlink != 1 ||
+     chdir("vfspath.tmp/sub") < 0 || link("../linkfile", "./alias///") < 0 ||
+     chdir("/") < 0 || stat(dst, &st) < 0 || st.nlink != 2 ||
+     st.dev != original.dev || st.ino != original.ino ||
+     stat(src, &st) < 0 || st.nlink != 2)
+    fail("link identity or count");
+  check_file(dst, &original);
+  check_link_failure(src, src);
+  check_link_failure(src, dst);
+  check_link_failure("vfspath.tmp/sub", "vfspath.tmp/dirlink");
+  check_missing("vfspath.tmp/dirlink");
+  for(uint i = 0; i < sizeof(bad)/sizeof(bad[0]); i++){
+    check_link_failure(src, bad[i]);
+    if(strcmp(bad[i], "vfspath.tmp/data") != 0 && unlink(bad[i]) != -1)
+      fail("unlink invalid path");
+  }
+
+  if(link("vfspath.tmp/missing", "vfspath.tmp/newlink") != -1)
+    fail("link missing source");
+  check_missing("vfspath.tmp/newlink");
+  if(link(src, "vfspath.tmp/abcdefghijklmnExtra") < 0)
+    fail("long link name");
+  check_file("vfspath.tmp/abcdefghijklmn", &original);
+  check_link_failure(src, "vfspath.tmp/abcdefghijklmnOther");
+  if(unlink("vfspath.tmp/abcdefghijklmnSuffix///") < 0 ||
+     stat(src, &st) < 0 || st.nlink != 2)
+    fail("long link cleanup");
+
+  fd = open(src, O_RDWR);
+  rd = open(dst, O_RDONLY);
+  shared = dup(fd);
+  if(fd < 0 || rd < 0 || shared < 0 ||
+     unlink(src) < 0 || fstat(fd, &st) < 0 || st.nlink != 1 ||
+     unlink(dst) < 0 || fstat(fd, &st) < 0 || st.nlink != 0)
+    fail("open unlink");
+  check_missing(src);
+  check_missing(dst);
+  if(write(fd, "Z", 1) != 1)
+    fail("write unlinked file");
+  close(fd);
+  if(read(shared, buf, sizeof(buf)) != sizeof(payload)-2 ||
+     memcmp(buf, payload+1, sizeof(payload)-2) != 0)
+    fail("dup kept unlinked file and offset");
+  pid = fork();
+  if(pid < 0)
+    fail("unlinked file fork");
+  if(pid == 0){
+    if(fstat(shared, &st) < 0 || st.nlink != 0 ||
+       write(shared, "!", 1) != 1)
+      exit(1);
+    close(shared);
+    close(rd);
+    exit(0);
+  }
+  if(wait(&status) < 0 || status != 0 ||
+     read(rd, buf, sizeof(buf)) != sizeof(payload) ||
+     buf[0] != 'Z' || memcmp(buf+1, payload+1, sizeof(payload)-2) != 0 ||
+     buf[sizeof(payload)-1] != '!' || read(rd, buf, 1) != 0)
+    fail("fork kept unlinked file and contents");
+  create_file(src);
+  if(stat(src, &fresh) < 0 || fresh.ino == original.ino ||
+     fstat(shared, &st) < 0 || st.nlink != 0 || st.size != sizeof(payload))
+    fail("recreated name reused a live unlinked inode");
+  check_file(src, &fresh);
+  close(shared);
+  close(rd);
+  if(unlink(src) < 0)
+    fail("open unlink cleanup");
+
+  if(mknod("vfspath.tmp/linkdev", 1, 0) < 0 ||
+     link("vfspath.tmp/linkdev", "vfspath.tmp/devlink") < 0 ||
+     stat("vfspath.tmp/linkdev", &original) < 0 ||
+     stat("vfspath.tmp/devlink", &st) < 0 || st.type != T_DEVICE ||
+     st.dev != original.dev || st.ino != original.ino || st.nlink != 2 ||
+     unlink("vfspath.tmp/linkdev") < 0 ||
+     stat("vfspath.tmp/devlink", &st) < 0 || st.nlink != 1 ||
+     unlink("vfspath.tmp/devlink") < 0)
+    fail("device hard link");
+
+  check_concurrent_links();
+  check_last_unlink_race();
+}
+
 static void
 check_creation(struct stat *data, struct stat *longname)
 {
@@ -317,6 +533,7 @@ check_creation(struct stat *data, struct stat *longname)
     fail("removed parent fixture");
   check_create_failure("lost");
   check_node_failure("lostnode");
+  check_link_failure("/vfspath.tmp/data", "lostlink");
   if(chdir("/") < 0)
     fail("leave removed parent");
 }
@@ -372,6 +589,7 @@ main(void)
 
   check_directories();
   check_creation(&data, &longname);
+  check_links();
 
   if(stat("vfspath.tmp", &parent_before) < 0)
     fail("parent before cycles");
@@ -385,8 +603,14 @@ main(void)
     if(stat("vfspath.tmp/cycle", &cycle) < 0)
       fail("cycle stat");
     check_file("vfspath.tmp/sub/../cycle", &cycle);
-    if(unlink("vfspath.tmp/cycle") < 0)
-      fail("cycle unlink");
+    if(link("vfspath.tmp/cycle", "vfspath.tmp/cyclelink") < 0 ||
+       stat("vfspath.tmp/cycle", &cycle) < 0 || cycle.nlink != 2 ||
+       unlink("vfspath.tmp/cycle") < 0)
+      fail("cycle link/unlink");
+    check_file("vfspath.tmp/cyclelink", &cycle);
+    if(stat("vfspath.tmp/cyclelink", &cycle) < 0 || cycle.nlink != 1 ||
+       unlink("vfspath.tmp/cyclelink") < 0)
+      fail("cycle last link");
     if(mkdir("vfspath.tmp/cycledir") < 0 ||
        mknod("vfspath.tmp/cycledev", 1, 0) < 0 ||
        unlink("vfspath.tmp/cycledev") < 0 ||

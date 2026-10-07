@@ -199,6 +199,28 @@ vfs_mknod(struct vnode *dir, const char *name, uint len, int major, int minor)
   return dir->ops->mknod(dir->data, name, len, major, minor);
 }
 
+int
+vfs_link(struct vnode *dir, const char *name, uint len, struct vnode *target)
+{
+  if(!valid_component(name, len) || dir->ops != target->ops ||
+     dir->ops->same_fs == 0 || dir->ops->link == 0)
+    return -1;
+  if(dir->ops->same_fs(dir->data, target->data) != 1)
+    return -1;
+  return dir->ops->link(dir->data, name, len, target->data);
+}
+
+int
+vfs_unlink(struct vnode *dir, const char *name, uint len)
+{
+  if(!valid_component(name, len) || dir->ops->unlink == 0)
+    return -1;
+  if((len == 1 && name[0] == '.') ||
+     (len == 2 && name[0] == '.' && name[1] == '.'))
+    return -1;
+  return dir->ops->unlink(dir->data, name, len);
+}
+
 static struct vnode*
 vfs_walk_path(struct vnode *start, const char *path, const char **last, uint *lastlen)
 {
