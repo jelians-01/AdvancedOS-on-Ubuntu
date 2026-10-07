@@ -538,6 +538,169 @@ check_creation(struct stat *data, struct stat *longname)
     fail("leave removed parent");
 }
 
+static void
+check_chdir_failure(const char *path)
+{
+  struct stat before, after;
+
+  if(stat(".", &before) < 0 || chdir(path) != -1 ||
+     stat(".", &after) < 0 || before.dev != after.dev ||
+     before.ino != after.ino)
+    fail("failed chdir changed cwd");
+}
+
+static void
+check_cwd_fork(void)
+{
+  int ready[2], go[2], pid, status;
+  char byte;
+
+  if(mkdir("vfspath.tmp/cwdleft") < 0 ||
+     mkdir("vfspath.tmp/cwdright") < 0 ||
+     chdir("vfspath.tmp/cwdleft") < 0 ||
+     pipe(ready) < 0 || pipe(go) < 0)
+    fail("cwd fork setup");
+  pid = fork();
+  if(pid < 0)
+    fail("cwd fork");
+  if(pid == 0){
+    close(ready[0]);
+    close(go[1]);
+    check_same_dir(".", "/vfspath.tmp/cwdleft");
+    if(write(ready[1], "R", 1) != 1)
+      fail("cwd ready");
+    close(ready[1]);
+    if(read(go[0], &byte, 1) != 1)
+      fail("cwd go");
+    close(go[0]);
+    // Parent has changed cwd, but this inherited reference still names left.
+    check_same_dir(".", "/vfspath.tmp/cwdleft");
+    create_file("childfile");
+    if(chdir("..") < 0)
+      fail("child chdir");
+    check_same_dir(".", "/vfspath.tmp");
+    exit(0);
+  }
+  close(ready[1]);
+  close(go[0]);
+  if(read(ready[0], &byte, 1) != 1 || byte != 'R')
+    fail("cwd child ready");
+  close(ready[0]);
+  if(chdir("../cwdright") < 0)
+    fail("parent chdir");
+  create_file("parentfile");
+  if(write(go[1], "G", 1) != 1)
+    fail("cwd release child");
+  close(go[1]);
+  if(wait(&status) != pid || status != 0)
+    fail("cwd child status");
+  // Child's chdir must not change the parent's pointer.
+  check_same_dir(".", "/vfspath.tmp/cwdright");
+  check_missing("childfile");
+  check_missing("../cwdleft/parentfile");
+  struct stat st;
+  if(stat("../cwdleft/childfile", &st) < 0)
+    fail("child relative create");
+  check_file("../cwdleft/childfile", &st);
+  if(stat("parentfile", &st) < 0)
+    fail("parent relative create");
+  check_file("parentfile", &st);
+  if(chdir("/") < 0 || unlink("vfspath.tmp/cwdleft/childfile") < 0 ||
+     unlink("vfspath.tmp/cwdright/parentfile") < 0 ||
+     unlink("vfspath.tmp/cwdleft") < 0 || unlink("vfspath.tmp/cwdright") < 0)
+    fail("cwd fork cleanup");
+}
+
+static void
+check_removed_cwd_exit(void)
+{
+  const char *path = "/vfspath.tmp/cwdgone";
+  struct stat old, fresh, held;
+  int gate[2], pid, status;
+  char byte;
+
+  // More than NINODE distinct removed directories; child exit owns the last
+  // cwd reference after the parent moves away and reuses the pathname.
+  for(int i = 0; i < 80; i++){
+    if(mkdir(path) < 0 || chdir(path) < 0 ||
+       stat(".", &old) < 0 || pipe(gate) < 0)
+      fail("removed cwd setup");
+    pid = fork();
+    if(pid < 0)
+      fail("removed cwd fork");
+    if(pid == 0){
+      close(gate[1]);
+      if(read(gate[0], &byte, 1) != 1)
+        fail("removed cwd gate");
+      close(gate[0]);
+      if(stat(".", &held) < 0 || held.dev != old.dev ||
+         held.ino != old.ino || held.type != T_DIR || held.nlink != 0)
+        fail("inherited removed cwd identity");
+      // Empty path and "." retain rev5 behavior even for a removed cwd.
+      if(chdir("") < 0 || chdir(".") < 0)
+        fail("removed cwd self chdir");
+      check_chdir_failure("missing");
+      check_create_failure("lost");
+      check_node_failure("lostnode");
+      check_link_failure("/vfspath.tmp/data", "lostlink");
+      if(stat(path, &fresh) < 0 || fresh.ino == old.ino || fresh.nlink != 1)
+        fail("removed cwd followed reused pathname");
+      // Do not chdir away: exit must release and reclaim the old directory.
+      exit(0);
+    }
+    close(gate[0]);
+    if(unlink(path) < 0 || chdir("/") < 0 || mkdir(path) < 0 ||
+       stat(path, &fresh) < 0 || fresh.ino == old.ino)
+      fail("recreate name with inherited cwd alive");
+    if(write(gate[1], "G", 1) != 1)
+      fail("removed cwd start");
+    close(gate[1]);
+    if(wait(&status) != pid || status != 0 || unlink(path) < 0)
+      fail("removed cwd exit cleanup");
+  }
+}
+
+static void
+check_cwd(void)
+{
+  struct stat before, after;
+  const char *bad[] = {
+    "/vfspath.tmp/missing", "/vfspath.tmp/data", "/vfspath.tmp/data/child",
+    "/vfspath.tmp/cwddev",
+  };
+
+  if(stat("vfspath.tmp", &before) < 0 ||
+     mknod("vfspath.tmp/cwddev", 1, 0) < 0 ||
+     chdir("vfspath.tmp/sub") < 0)
+    fail("cwd checks setup");
+  for(uint i = 0; i < sizeof(bad)/sizeof(bad[0]); i++)
+    check_chdir_failure(bad[i]);
+  check_chdir_failure((const char *)~(uint64)0);
+  for(int i = 0; i < 200; i++){
+    if(chdir("") < 0 || chdir("./") < 0 ||
+       chdir("../sub///") < 0 || chdir("/vfspath.tmp/sub") < 0)
+      fail("cwd reference cycle");
+    check_same_dir(".", "/vfspath.tmp/sub");
+    check_chdir_failure("../data");
+  }
+  if(chdir("/") < 0 || chdir("..") < 0)
+    fail("root chdir");
+  check_same_dir(".", "/");
+  if(unlink("vfspath.tmp/cwddev") < 0)
+    fail("cwd device cleanup");
+  if(mkdir("vfspath.tmp/cwdparent") < 0 ||
+     chdir("vfspath.tmp/cwdparent") < 0 ||
+     unlink("/vfspath.tmp/cwdparent") < 0 || chdir("..") < 0)
+    fail("leave removed cwd through parent");
+  check_same_dir(".", "/vfspath.tmp");
+  if(chdir("/") < 0)
+    fail("cwd return to root");
+  check_cwd_fork();
+  check_removed_cwd_exit();
+  if(stat("vfspath.tmp", &after) < 0 || after.nlink != before.nlink)
+    fail("cwd tests leaked directory links");
+}
+
 int
 main(void)
 {
@@ -590,6 +753,7 @@ main(void)
   check_directories();
   check_creation(&data, &longname);
   check_links();
+  check_cwd();
 
   if(stat("vfspath.tmp", &parent_before) < 0)
     fail("parent before cycles");

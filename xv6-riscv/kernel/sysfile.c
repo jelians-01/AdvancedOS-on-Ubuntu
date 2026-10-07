@@ -245,24 +245,27 @@ uint64
 sys_chdir(void)
 {
   char path[MAXPATH];
-  struct inode *ip;
+  struct vnode *vn, *old;
+  struct stat st;
   struct proc *p = myproc();
-  
-  begin_op();
-  if(argstr(0, path, MAXPATH) < 0 || (ip = namei(path)) == 0){
-    end_op();
+  int r;
+
+  if(argstr(0, path, MAXPATH) < 0)
+    return -1;
+  if((vn = vfs_xv6_lookup_path(path)) == 0)
+    return -1;
+  vfs_lock(vn);
+  r = vfs_getattr(vn, &st);
+  vfs_unlock(vn);
+  if(r < 0 || st.type != T_DIR){
+    vfs_put(vn);
     return -1;
   }
-  ilock(ip);
-  if(ip->type != T_DIR){
-    iunlockput(ip);
-    end_op();
-    return -1;
-  }
-  iunlock(ip);
-  iput(p->cwd);
-  end_op();
-  p->cwd = ip;
+  // Publish the new owned reference before releasing the old one.
+  // xv6 has no threads sharing this proc; no process lock is needed here.
+  old = p->cwd;
+  p->cwd = vn;
+  vfs_put(old);
   return 0;
 }
 

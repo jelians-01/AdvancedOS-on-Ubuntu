@@ -378,27 +378,29 @@ vfs_xv6_get(struct inode *ip)
   return vn;
 }
 
+struct vnode*
+vfs_xv6_root(void)
+{
+  struct inode *ip = iroot();
+  struct vnode *vn;
+
+  // Hand our owned inode reference directly to the vnode table.
+  vn = vfs_node_get(&native_ops, ip);
+  if(vn == 0)
+    native_release(ip);
+  return vn;
+}
+
 static struct vnode*
 native_start(const char *path)
 {
-  struct inode *ip;
-  struct vnode *start;
-
   if(path == 0)
     return 0;
-  if(*path == '/'){
-    // Bootstrap only the native root; VFS walks the actual input path.
-    begin_op();
-    ip = namei("/");
-    end_op();
-  } else {
-    ip = idup(myproc()->cwd);
-  }
-  if(ip == 0)
+  if(*path == '/')
+    return vfs_xv6_root();
+  if(myproc()->cwd == 0)
     return 0;
-  start = vfs_xv6_get(ip);
-  native_release(ip);
-  return start;
+  return vfs_dup(myproc()->cwd);
 }
 
 // Consume the vnode reference and return an independent inode reference.
