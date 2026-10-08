@@ -146,73 +146,56 @@ uint64
 sys_open(void)
 {
   char path[MAXPATH];
-  int fd, omode;
+  int fd, omode, r, major = -1;
   struct file *f;
-  struct inode *ip;
-  int n;
+  struct vnode *vn;
+  struct stat st;
 
   argint(1, &omode);
-  if((n = argstr(0, path, MAXPATH)) < 0)
+  if(argstr(0, path, MAXPATH) < 0)
     return -1;
 
-  // VFS lookup/create and reference release own their transactions.
+  // Own one vnode reference until it is handed to the open file.
   if(omode & O_CREATE)
-    ip = vfs_xv6_create_file(path);
+    vn = vfs_xv6_create_file(path);
   else
-    ip = vfs_xv6_namei(path);
-  if(ip == 0)
+    vn = vfs_xv6_lookup_path(path);
+  if(vn == 0)
     return -1;
 
-  begin_op();
-  ilock(ip);
-  if(ip->type == T_DIR && omode != O_RDONLY){
-    iunlockput(ip);
-    end_op();
+  vfs_lock(vn);
+  r = vfs_getattr(vn, &st);
+  if(r == 0 && st.type == T_DEVICE)
+    major = vfs_device_major(vn);
+  vfs_unlock(vn);
+  if(r < 0 ||
+     (st.type != T_FILE && st.type != T_DIR && st.type != T_DEVICE) ||
+     (st.type == T_DIR && omode != O_RDONLY) ||
+     (st.type == T_DEVICE && (major < 0 || major >= NDEV))){
+    vfs_put(vn);
     return -1;
   }
 
-  if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
-    iunlockput(ip);
-    end_op();
-    return -1;
-  }
-
+  // Allocate before truncating: descriptor exhaustion must preserve contents.
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
     if(f)
       fileclose(f);
-    iunlockput(ip);
-    end_op();
+    vfs_put(vn);
     return -1;
   }
 
-  if(ip->type == T_DEVICE){
-    f->type = FD_DEVICE;
-    f->major = ip->major;
-  } else {
-    f->type = FD_INODE;
-    f->off = 0;
-  }
-  f->ip = ip;
+  f->type = st.type == T_DEVICE ? FD_DEVICE : FD_VNODE;
+  f->vn = vn;
+  f->major = major;
+  f->off = 0;
   f->readable = !(omode & O_WRONLY);
   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
 
-  iunlock(ip);
-  end_op();
-
-  // vfs_xv6_get may release an extra reference inside its own transaction.
-  // The original inode is now unlocked and the open transaction has ended.
-  if(f->type == FD_INODE){
-    f->vn = vfs_xv6_get(ip);
-    if(f->vn == 0){
-      myproc()->ofile[fd] = 0;
-      fileclose(f);
-      return -1;
-    }
-    if((omode & O_TRUNC) && vfs_truncate_zero(f->vn) < 0){
-      myproc()->ofile[fd] = 0;
-      fileclose(f);
-      return -1;
-    }
+  if((omode & O_TRUNC) && st.type == T_FILE &&
+     vfs_truncate_zero(vn) < 0){
+    myproc()->ofile[fd] = 0;
+    fileclose(f);
+    return -1;
   }
 
   return fd;

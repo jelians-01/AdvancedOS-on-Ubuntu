@@ -41,6 +41,14 @@ native_getattr(void *data, struct stat *st)
   return 0;
 }
 
+static int
+native_device_major(void *data)
+{
+  struct inode *ip = data;
+
+  return ip->type == T_DEVICE ? ip->major : -1;
+}
+
 static void
 native_release(void *data)
 {
@@ -350,6 +358,7 @@ static const struct vnode_ops native_ops = {
   .unlock = native_unlock,
   .read_at = native_read_at,
   .getattr = native_getattr,
+  .device_major = native_device_major,
   .release = native_release,
   .write_at = native_write_at,
   .truncate_zero = native_truncate_zero,
@@ -361,22 +370,6 @@ static const struct vnode_ops native_ops = {
   .link = native_link,
   .unlink = native_unlink,
 };
-
-struct vnode*
-vfs_xv6_get(struct inode *ip)
-{
-  struct vnode *vn;
-
-  if(ip == 0)
-    return 0;
-
-  // Borrow the caller's inode and acquire our own backend reference.
-  idup(ip);
-  vn = vfs_node_get(&native_ops, ip);
-  if(vn == 0)
-    native_release(ip);
-  return vn;
-}
 
 struct vnode*
 vfs_xv6_root(void)
@@ -403,21 +396,6 @@ native_start(const char *path)
   return vfs_dup(myproc()->cwd);
 }
 
-// Consume the vnode reference and return an independent inode reference.
-static struct inode*
-native_inode(struct vnode *vn)
-{
-  struct inode *ip;
-
-  if(vn == 0)
-    return 0;
-  ip = vfs_node_data(vn, &native_ops);
-  if(ip)
-    idup(ip);
-  vfs_put(vn);
-  return ip;
-}
-
 struct vnode*
 vfs_xv6_lookup_path(const char *path)
 {
@@ -429,12 +407,6 @@ vfs_xv6_lookup_path(const char *path)
   vn = vfs_walk(start, path);
   vfs_put(start);
   return vn;
-}
-
-struct inode*
-vfs_xv6_namei(const char *path)
-{
-  return native_inode(vfs_xv6_lookup_path(path));
 }
 
 static struct vnode*
@@ -450,7 +422,7 @@ native_parent(const char *path, const char **name, uint *len)
   return parent;
 }
 
-struct inode*
+struct vnode*
 vfs_xv6_create_file(const char *path)
 {
   struct vnode *parent, *vn;
@@ -462,7 +434,7 @@ vfs_xv6_create_file(const char *path)
     return 0;
   vn = vfs_create_file(parent, name, len);
   vfs_put(parent);
-  return native_inode(vn);
+  return vn;
 }
 
 int

@@ -701,6 +701,133 @@ check_cwd(void)
     fail("cwd tests leaked directory links");
 }
 
+// Device nodes keep their identity through unlink, dup and fork.
+// Zero-byte console I/O exercises dispatch without waiting for keyboard input.
+static void
+check_open_devices(void)
+{
+  const char *path = "vfspath.tmp/opendev";
+  struct stat old, st;
+  char byte;
+  int fd, other, gate[2], pid, status;
+
+  if(mknod(path, 1, 0) < 0)
+    fail("open device setup");
+  fd = open(path, O_CREATE | O_RDWR | O_TRUNC);
+  if(fd < 0 || fstat(fd, &old) < 0 || old.type != T_DEVICE ||
+     read(fd, &byte, 0) != 0 || write(fd, &byte, 0) != 0 ||
+     read(fd, &byte, -1) != -1 || write(fd, &byte, -1) != -1)
+    fail("device metadata or I/O");
+  other = dup(fd);
+  if(other < 0 || pipe(gate) < 0)
+    fail("device dup or gate");
+  pid = fork();
+  if(pid < 0)
+    fail("device fork");
+  if(pid == 0){
+    close(gate[1]);
+    close(fd);
+    if(read(gate[0], &byte, 1) != 1)
+      fail("device gate read");
+    close(gate[0]);
+    if(fstat(other, &st) < 0 || st.type != T_DEVICE ||
+       st.dev != old.dev || st.ino != old.ino || st.nlink != 0 ||
+       read(other, &byte, 0) != 0 || write(other, &byte, 0) != 0)
+      fail("inherited unlinked device");
+    // exit must release the last reference to the old device.
+    exit(0);
+  }
+  close(gate[0]);
+  if(unlink(path) < 0 || mknod(path, 1, 0) < 0 ||
+     stat(path, &st) < 0 || st.ino == old.ino)
+    fail("device name reuse");
+  close(fd);
+  close(other);
+  if(write(gate[1], "G", 1) != 1)
+    fail("device gate write");
+  close(gate[1]);
+  if(wait(&status) != pid || status != 0 || unlink(path) < 0)
+    fail("device child cleanup");
+
+  // Each iteration creates fresh node lifetimes, exceeding the inode table.
+  for(int i = 0; i < 80; i++){
+    if(mknod(path, 1, 0) < 0)
+      fail("device cycle setup");
+    fd = open(path, O_RDONLY);
+    other = open(path, O_WRONLY);
+    if(fd < 0 || other < 0 || unlink(path) < 0 ||
+       fstat(fd, &st) < 0 || st.type != T_DEVICE || st.nlink != 0 ||
+       read(fd, &byte, 0) != 0 || write(other, &byte, 0) != 0 ||
+       write(fd, &byte, 0) != -1 || read(other, &byte, 0) != -1)
+      fail("device cycle permissions or lifetime");
+    close(fd);
+    close(other);
+
+    // Native mknod permits these majors, but open must reject them.
+    if(mknod(path, NDEV, 0) < 0)
+      fail("invalid device setup");
+    check_missing(path);
+    check_create_failure(path);
+    if(unlink(path) < 0 || mknod(path, -1, 0) < 0)
+      fail("negative device setup");
+    check_missing(path);
+    if(unlink(path) < 0)
+      fail("invalid device cleanup");
+  }
+
+  // Major zero is in range but has no registered driver in this kernel.
+  if(mknod(path, 0, 0) < 0)
+    fail("unregistered device setup");
+  fd = open(path, O_RDWR);
+  if(fd < 0 || fstat(fd, &st) < 0 || st.type != T_DEVICE ||
+     read(fd, &byte, 0) != -1 || write(fd, &byte, 0) != -1)
+    fail("unregistered device dispatch");
+  close(fd);
+  if(unlink(path) < 0)
+    fail("unregistered device cleanup");
+}
+
+static void
+check_open_exhaustion(void)
+{
+  const char *source = "vfspath.tmp/fullsrc";
+  const char *file = "vfspath.tmp/fullfile";
+  const char *device = "vfspath.tmp/fulldev";
+  struct stat st;
+  int held[NOFILE], count = 0, fd;
+
+  create_file(source);
+  if(stat(source, &st) < 0)
+    fail("fd exhaustion setup");
+  while(count < NOFILE){
+    fd = open(source, O_RDONLY);
+    if(fd < 0)
+      break;
+    held[count++] = fd;
+  }
+  if(count == 0 || count == NOFILE)
+    fail("fd exhaustion precondition");
+  fd = open(source, O_WRONLY | O_TRUNC);
+  if(fd >= 0)
+    fail("truncate succeeded with full fd table");
+
+  for(int i = 0; i < 80; i++){
+    // Creation precedes fd allocation, so the new name must exist even
+    // though open fails. Unlink reclaims it only if open dropped its ref.
+    check_create_failure(file);
+    if(unlink(file) < 0 || mknod(device, 1, 0) < 0)
+      fail("full fd table creation");
+    check_missing(device);
+    if(unlink(device) < 0)
+      fail("full fd table device cleanup");
+  }
+  while(count > 0)
+    close(held[--count]);
+  check_file(source, &st);
+  if(unlink(source) < 0)
+    fail("fd exhaustion cleanup");
+}
+
 int
 main(void)
 {
@@ -754,6 +881,8 @@ main(void)
   check_creation(&data, &longname);
   check_links();
   check_cwd();
+  check_open_devices();
+  check_open_exhaustion();
 
   if(stat("vfspath.tmp", &parent_before) < 0)
     fail("parent before cycles");

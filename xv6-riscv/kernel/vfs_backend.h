@@ -3,7 +3,6 @@
 
 // Backend interface. Include types.h first.
 struct vnode;
-struct inode;
 struct stat;
 
 struct vnode_ops {
@@ -11,6 +10,8 @@ struct vnode_ops {
   void (*unlock)(void *data);
   int (*read_at)(void *data, int user_dst, uint64 dst, uint off, uint n);
   int (*getattr)(void *data, struct stat *st);
+  // Optional, called with the node locked. Return devsw major or -1.
+  int (*device_major)(void *data);
   void (*release)(void *data);
   // S1: enter with a reference, no node lock and no outer transaction.
   // write_at returns actual progress, 0 for n == 0, or -1 on no progress.
@@ -48,15 +49,6 @@ struct vnode_ops {
 // The operations table must remain valid for the lifetime of the vnode.
 struct vnode *vfs_node_get(const struct vnode_ops *ops, void *data);
 
-// Temporary native bridge. Caller keeps its existing inode reference.
-// Returns an additional vnode reference, or 0 if the table is full.
-// Call without a node lock or an outer native log transaction.
-struct vnode *vfs_xv6_get(struct inode *ip);
-
-// Temporary native bridge only: borrow data if the backend matches.
-// Caller must keep vn referenced while using the returned pointer.
-void *vfs_node_data(struct vnode *vn, const struct vnode_ops *ops);
-
 // Acquire one unlocked native root vnode, or return 0 if wrapping fails.
 // Call after fsinit in process context, without spinlocks/node locks or an
 // outer native transaction; wrapping/release may sleep. Caller vfs_put()s.
@@ -67,14 +59,10 @@ struct vnode *vfs_xv6_root(void);
 // No node lock or outer native transaction. Single-root bridge until mounts.
 struct vnode *vfs_xv6_lookup_path(const char *path);
 
-// Resolve via VFS components, then return one unlocked inode reference.
-// Native-only transition for open; caller eventually iput()s in a transaction.
-// Enter without a node lock or outer native transaction.
-struct inode *vfs_xv6_namei(const char *path);
-
 // Find the parent via VFS, then create/open a regular file in that directory.
-// Same ownership/entry rules as vfs_xv6_namei; existing devices are compatible.
-struct inode *vfs_xv6_create_file(const char *path);
+// Return one unlocked vnode reference or 0; caller eventually vfs_put()s.
+// No node lock or outer native transaction; existing devices are compatible.
+struct vnode *vfs_xv6_create_file(const char *path);
 
 // Native-only path bridges for mkdir/mknod. No outer lock/transaction.
 // Return 0/-1; no reference is transferred to the caller.

@@ -112,6 +112,14 @@ vfs_getattr(struct vnode *vn, struct stat *st)
 }
 
 int
+vfs_device_major(struct vnode *vn)
+{
+  if(vn->ops->device_major == 0)
+    return -1;
+  return vn->ops->device_major(vn->data);
+}
+
+int
 vfs_write_at(struct vnode *vn, int user_src, uint64 src, uint off, uint n)
 {
   if((user_src != 0 && user_src != 1) ||
@@ -130,12 +138,6 @@ vfs_truncate_zero(struct vnode *vn)
   if(vn->ops->truncate_zero == 0)
     return -1;
   return vn->ops->truncate_zero(vn->data);
-}
-
-void*
-vfs_node_data(struct vnode *vn, const struct vnode_ops *ops)
-{
-  return vn->ops == ops ? vn->data : 0;
 }
 
 static int

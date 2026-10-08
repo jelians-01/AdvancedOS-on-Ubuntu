@@ -30,6 +30,11 @@ int vfs_read_at(struct vnode *vn, int user_dst,
 // Return 0 on success, or -1 on error.
 int vfs_getattr(struct vnode *vn, struct stat *st);
 
+// Caller holds a live reference and the node lock.
+// Return the device's devsw major, or -1 for non-devices/unsupported backends.
+// Metadata only: device I/O is dispatched separately, without this lock.
+int vfs_device_major(struct vnode *vn);
+
 // Caller holds a reference, but no node lock or native log transaction.
 // user_src: 1 for a user address, 0 for a kernel address.
 // Return bytes written, 0 for an empty request, or -1 if no progress.

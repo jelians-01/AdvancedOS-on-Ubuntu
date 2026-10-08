@@ -41,6 +41,7 @@ filealloc(void)
   for(f = ftable.file; f < ftable.file + NFILE; f++){
     if(f->ref == 0){
       f->ref = 1;
+      f->type = FD_NONE;
       f->vn = 0;
       release(&ftable.lock);
       return f;
@@ -68,7 +69,6 @@ fileclose(struct file *f)
 {
   int type, writable;
   struct pipe *pipe;
-  struct inode *ip;
   struct vnode *vn;
 
   acquire(&ftable.lock);
@@ -82,7 +82,6 @@ fileclose(struct file *f)
   type = f->type;
   writable = f->writable;
   pipe = f->pipe;
-  ip = f->ip;
   vn = f->vn;
   f->ref = 0;
   f->type = FD_NONE;
@@ -91,14 +90,8 @@ fileclose(struct file *f)
 
   if(type == FD_PIPE){
     pipeclose(pipe, writable);
-  } else if(type == FD_INODE || type == FD_DEVICE){
-    begin_op();
-    iput(ip);
-    end_op();
-    // The bridge still owns separate inode and vnode references.
-    // The vnode's final release starts its own transaction.
-    if(vn)
-      vfs_put(vn);
+  } else if(type == FD_VNODE || type == FD_DEVICE){
+    vfs_put(vn);
   }
 }
 
@@ -110,19 +103,13 @@ filestat(struct file *f, uint64 addr)
   struct proc *p = myproc();
   struct stat st;
   
-  if(f->type == FD_INODE || f->type == FD_DEVICE){
-    if(f->type == FD_INODE){
-      int r;
-      vfs_lock(f->vn);
-      r = vfs_getattr(f->vn, &st);
-      vfs_unlock(f->vn);
-      if(r < 0)
-        return -1;
-    } else {
-      ilock(f->ip);
-      stati(f->ip, &st);
-      iunlock(f->ip);
-    }
+  if(f->type == FD_VNODE || f->type == FD_DEVICE){
+    int r;
+    vfs_lock(f->vn);
+    r = vfs_getattr(f->vn, &st);
+    vfs_unlock(f->vn);
+    if(r < 0)
+      return -1;
     if(copyout(p->pagetable, addr, (char *)&st, sizeof(st)) < 0)
       return -1;
     return 0;
@@ -146,7 +133,7 @@ fileread(struct file *f, uint64 addr, int n)
     if(f->major < 0 || f->major >= NDEV || !devsw[f->major].read)
       return -1;
     r = devsw[f->major].read(1, addr, n);
-  } else if(f->type == FD_INODE){
+  } else if(f->type == FD_VNODE){
     acquiresleep(&f->poslock);
     vfs_lock(f->vn);
     if((uint)n > (uint)-1 - f->off)
@@ -178,7 +165,7 @@ filewrite(struct file *f, uint64 addr, int n)
     if(f->major < 0 || f->major >= NDEV || !devsw[f->major].write)
       return -1;
     ret = devsw[f->major].write(1, addr, n);
-  } else if(f->type == FD_INODE){
+  } else if(f->type == FD_VNODE){
     // The backend owns the node lock and native log transactions.
     acquiresleep(&f->poslock);
     r = vfs_write_at(f->vn, 1, addr, f->off, n);
