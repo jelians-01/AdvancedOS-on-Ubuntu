@@ -518,6 +518,8 @@ forkret(void)
     // regular process (e.g., because it calls sleep), and thus cannot
     // be run from main().
     fsinit(ROOTDEV);
+    vfs_selftest();
+    vfs_xv6_init();
     // Root acquisition may sleep; p->lock was released above.
     p->cwd = vfs_xv6_root();
     if(p->cwd == 0)

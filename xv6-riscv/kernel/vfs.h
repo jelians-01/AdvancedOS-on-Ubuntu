@@ -3,10 +3,20 @@
 
 // Include types.h before this header.
 struct vnode;
+struct vfs_fs;
 struct stat;
 
 // Initialize VFS memory state; no disk I/O.
 void vfs_init(void);
+
+// Caller already owns an instance reference. dup does not sleep.
+// put consumes one reference and may sleep; no spinlock/node lock/transaction.
+struct vfs_fs *vfs_fs_dup(struct vfs_fs *fs);
+void vfs_fs_put(struct vfs_fs *fs);
+
+// Borrow a live instance; return one unlocked directory vnode reference or 0.
+// No node lock or outer transaction. Root lookup/release may sleep.
+struct vnode *vfs_fs_root(struct vfs_fs *fs);
 
 // Caller must already hold a valid vnode reference.
 struct vnode *vfs_dup(struct vnode *vn);

@@ -9,15 +9,23 @@
 
 // Backend fields are immutable while ref > 0.
 // References and slot allocation are protected by vtable.lock.
+struct vfs_fs {
+  int ref;
+  const struct vfs_fs_ops *ops;
+  const struct vnode_ops *node_ops;
+  void *data;
+};
+
 struct vnode {
   int ref;
-  const struct vnode_ops *ops;
+  struct vfs_fs *fs;
   void *data;
 };
 
 static struct {
   struct spinlock lock;
   struct vnode nodes[NINODE];
+  struct vfs_fs filesystems[NVFS];
 } vtable;
 
 void
@@ -26,26 +34,119 @@ vfs_init(void)
   initlock(&vtable.lock, "vtable");
 }
 
+struct vfs_fs*
+vfs_fs_create(const struct vfs_fs_ops *fs_ops,
+              const struct vnode_ops *node_ops, void *data)
+{
+  struct vfs_fs *fs;
+
+  if(fs_ops == 0 || fs_ops->root == 0 || node_ops == 0 ||
+     node_ops->lock == 0 || node_ops->unlock == 0 ||
+     node_ops->read_at == 0 || node_ops->getattr == 0 ||
+     node_ops->release == 0)
+    return 0;
+  acquire(&vtable.lock);
+  for(fs = vtable.filesystems; fs < vtable.filesystems + NVFS; fs++){
+    if(fs->ref == 0){
+      fs->ops = fs_ops;
+      fs->node_ops = node_ops;
+      fs->data = data;
+      fs->ref = 1;
+      release(&vtable.lock);
+      return fs;
+    }
+  }
+  release(&vtable.lock);
+  return 0;
+}
+
+struct vfs_fs*
+vfs_fs_dup(struct vfs_fs *fs)
+{
+  acquire(&vtable.lock);
+  if(fs == 0 || fs->ref < 1)
+    panic("vfs_fs_dup");
+  fs->ref++;
+  release(&vtable.lock);
+  return fs;
+}
+
+void
+vfs_fs_put(struct vfs_fs *fs)
+{
+  const struct vfs_fs_ops *ops;
+  void *data;
+
+  acquire(&vtable.lock);
+  if(fs == 0 || fs->ref < 1)
+    panic("vfs_fs_put");
+  if(--fs->ref > 0){
+    release(&vtable.lock);
+    return;
+  }
+  ops = fs->ops;
+  data = fs->data;
+  fs->ops = 0;
+  fs->node_ops = 0;
+  fs->data = 0;
+  release(&vtable.lock);
+
+  if(ops->release)
+    ops->release(data);
+}
+
 struct vnode*
-vfs_node_get(const struct vnode_ops *ops, void *data)
+vfs_fs_root(struct vfs_fs *fs)
+{
+  void *data = 0;
+  struct vnode *vn;
+  struct stat st;
+  int r;
+
+  if(fs == 0)
+    return 0;
+  if(fs->ops->root(fs->data, &data) < 0 || data == 0)
+    return 0;
+  vn = vfs_node_get(fs, data);
+  if(vn == 0){
+    fs->node_ops->release(data);
+    return 0;
+  }
+  vfs_lock(vn);
+  r = vfs_getattr(vn, &st);
+  vfs_unlock(vn);
+  if(r < 0 || st.type != T_DIR){
+    vfs_put(vn);
+    return 0;
+  }
+  return vn;
+}
+
+struct vnode*
+vfs_node_get(struct vfs_fs *fs, void *data)
 {
   struct vnode *vn, *empty = 0;
 
+  if(fs == 0 || data == 0)
+    return 0;
   acquire(&vtable.lock);
+  if(fs->ref < 1)
+    panic("vfs_node_get fs");
   for(vn = vtable.nodes; vn < vtable.nodes + NINODE; vn++){
-    if(vn->ref > 0 && vn->ops == ops && vn->data == data){
+    if(vn->ref > 0 && vn->fs == fs && vn->data == data){
       vn->ref++;
       release(&vtable.lock);
       // The existing vnode already owns a backend reference.
       // Release the extra one outside the table's spinlock.
-      ops->release(data);
+      fs->node_ops->release(data);
       return vn;
     }
     if(vn->ref == 0 && empty == 0)
       empty = vn;
   }
   if(empty){
-    empty->ops = ops;
+    fs->ref++;
+    empty->fs = fs;
     empty->data = data;
     empty->ref = 1;
   }
@@ -67,7 +168,7 @@ vfs_dup(struct vnode *vn)
 void
 vfs_put(struct vnode *vn)
 {
-  const struct vnode_ops *ops;
+  struct vfs_fs *fs;
   void *data;
 
   acquire(&vtable.lock);
@@ -77,46 +178,47 @@ vfs_put(struct vnode *vn)
     release(&vtable.lock);
     return;
   }
-  ops = vn->ops;
+  fs = vn->fs;
   data = vn->data;
-  vn->ops = 0;
+  vn->fs = 0;
   vn->data = 0;
   release(&vtable.lock);
 
-  // The slot may now be reused. Use only the saved backend fields.
-  ops->release(data);
+  // The slot may now be reused. Keep the instance alive through release.
+  fs->node_ops->release(data);
+  vfs_fs_put(fs);
 }
 
 void
 vfs_lock(struct vnode *vn)
 {
-  vn->ops->lock(vn->data);
+  vn->fs->node_ops->lock(vn->data);
 }
 
 void
 vfs_unlock(struct vnode *vn)
 {
-  vn->ops->unlock(vn->data);
+  vn->fs->node_ops->unlock(vn->data);
 }
 
 int
 vfs_read_at(struct vnode *vn, int user_dst, uint64 dst, uint off, uint n)
 {
-  return vn->ops->read_at(vn->data, user_dst, dst, off, n);
+  return vn->fs->node_ops->read_at(vn->data, user_dst, dst, off, n);
 }
 
 int
 vfs_getattr(struct vnode *vn, struct stat *st)
 {
-  return vn->ops->getattr(vn->data, st);
+  return vn->fs->node_ops->getattr(vn->data, st);
 }
 
 int
 vfs_device_major(struct vnode *vn)
 {
-  if(vn->ops->device_major == 0)
+  if(vn->fs->node_ops->device_major == 0)
     return -1;
-  return vn->ops->device_major(vn->data);
+  return vn->fs->node_ops->device_major(vn->data);
 }
 
 int
@@ -125,19 +227,19 @@ vfs_write_at(struct vnode *vn, int user_src, uint64 src, uint off, uint n)
   if((user_src != 0 && user_src != 1) ||
      n > 0x7fffffffU || off + n < off)
     return -1;
-  if(vn->ops->write_at == 0)
+  if(vn->fs->node_ops->write_at == 0)
     return -1;
   if(n == 0)
     return 0;
-  return vn->ops->write_at(vn->data, user_src, src, off, n);
+  return vn->fs->node_ops->write_at(vn->data, user_src, src, off, n);
 }
 
 int
 vfs_truncate_zero(struct vnode *vn)
 {
-  if(vn->ops->truncate_zero == 0)
+  if(vn->fs->node_ops->truncate_zero == 0)
     return -1;
-  return vn->ops->truncate_zero(vn->data);
+  return vn->fs->node_ops->truncate_zero(vn->data);
 }
 
 static int
@@ -159,13 +261,13 @@ vfs_lookup(struct vnode *dir, const char *name, uint len)
   void *data = 0;
   struct vnode *vn;
 
-  if(!valid_component(name, len) || dir->ops->lookup == 0)
+  if(!valid_component(name, len) || dir->fs->node_ops->lookup == 0)
     return 0;
-  if(dir->ops->lookup(dir->data, name, len, &data) < 0 || data == 0)
+  if(dir->fs->node_ops->lookup(dir->data, name, len, &data) < 0 || data == 0)
     return 0;
-  vn = vfs_node_get(dir->ops, data);
+  vn = vfs_node_get(dir->fs, data);
   if(vn == 0)
-    dir->ops->release(data);
+    dir->fs->node_ops->release(data);
   return vn;
 }
 
@@ -175,52 +277,50 @@ vfs_create_file(struct vnode *dir, const char *name, uint len)
   void *data = 0;
   struct vnode *vn;
 
-  if(!valid_component(name, len) || dir->ops->create_file == 0)
+  if(!valid_component(name, len) || dir->fs->node_ops->create_file == 0)
     return 0;
-  if(dir->ops->create_file(dir->data, name, len, &data) < 0 || data == 0)
+  if(dir->fs->node_ops->create_file(dir->data, name, len, &data) < 0 || data == 0)
     return 0;
-  vn = vfs_node_get(dir->ops, data);
+  vn = vfs_node_get(dir->fs, data);
   if(vn == 0)
-    dir->ops->release(data);
+    dir->fs->node_ops->release(data);
   return vn;
 }
 
 int
 vfs_mkdir(struct vnode *dir, const char *name, uint len)
 {
-  if(!valid_component(name, len) || dir->ops->mkdir == 0)
+  if(!valid_component(name, len) || dir->fs->node_ops->mkdir == 0)
     return -1;
-  return dir->ops->mkdir(dir->data, name, len);
+  return dir->fs->node_ops->mkdir(dir->data, name, len);
 }
 
 int
 vfs_mknod(struct vnode *dir, const char *name, uint len, int major, int minor)
 {
-  if(!valid_component(name, len) || dir->ops->mknod == 0)
+  if(!valid_component(name, len) || dir->fs->node_ops->mknod == 0)
     return -1;
-  return dir->ops->mknod(dir->data, name, len, major, minor);
+  return dir->fs->node_ops->mknod(dir->data, name, len, major, minor);
 }
 
 int
 vfs_link(struct vnode *dir, const char *name, uint len, struct vnode *target)
 {
-  if(!valid_component(name, len) || dir->ops != target->ops ||
-     dir->ops->same_fs == 0 || dir->ops->link == 0)
+  if(!valid_component(name, len) || dir->fs != target->fs ||
+     dir->fs->node_ops->link == 0)
     return -1;
-  if(dir->ops->same_fs(dir->data, target->data) != 1)
-    return -1;
-  return dir->ops->link(dir->data, name, len, target->data);
+  return dir->fs->node_ops->link(dir->data, name, len, target->data);
 }
 
 int
 vfs_unlink(struct vnode *dir, const char *name, uint len)
 {
-  if(!valid_component(name, len) || dir->ops->unlink == 0)
+  if(!valid_component(name, len) || dir->fs->node_ops->unlink == 0)
     return -1;
   if((len == 1 && name[0] == '.') ||
      (len == 2 && name[0] == '.' && name[1] == '.'))
     return -1;
-  return dir->ops->unlink(dir->data, name, len);
+  return dir->fs->node_ops->unlink(dir->data, name, len);
 }
 
 static struct vnode*

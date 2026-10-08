@@ -3,6 +3,7 @@
 
 // Backend interface. Include types.h first.
 struct vnode;
+struct vfs_fs;
 struct stat;
 
 struct vnode_ops {
@@ -20,7 +21,7 @@ struct vnode_ops {
   int (*truncate_zero)(void *data);
   // Borrow dir, enter unlocked with no outer native transaction.
   // Success: 0 and one unlocked backend reference in *out_node.
-  // Failure: -1 and *out_node == 0. The child uses this same ops table.
+  // Failure: -1 and *out_node == 0. The child belongs to this same instance.
   int (*lookup)(void *dir, const char *name, uint len, void **out_node);
   // Same reference/output rules as lookup; lock the find-or-create operation.
   // Create only regular files. Native may return an existing device for rev5.
@@ -30,10 +31,7 @@ struct vnode_ops {
   // Existing names fail. Release all temporary nodes before returning.
   int (*mkdir)(void *dir, const char *name, uint len);
   int (*mknod)(void *dir, const char *name, uint len, int major, int minor);
-  // Borrow both nodes, no outer locks/transaction.
-  // same_fs: return exactly 1 iff both nodes belong to the same instance.
-  // Inspect only immutable identity; required for link (same ops is not enough).
-  int (*same_fs)(void *dir, void *target);
+  // Borrow both nodes in the same instance; no outer locks/transaction.
   // Non-directory target; reject dead parents/targets and link-count overflow.
   // Return 0/-1, no output references; undo a reserved link on failure.
   int (*link)(void *dir, const char *name, uint len, void *target);
@@ -42,15 +40,40 @@ struct vnode_ops {
   int (*unlink)(void *dir, const char *name, uint len);
 };
 
-// Caller owns one backend reference and holds no node lock or transaction.
-// Success consumes that reference and returns one vnode reference.
-// Failure returns 0 and leaves the backend reference with the caller.
-// Equal (ops, data) identifies the same live backend node.
-// The operations table must remain valid for the lifetime of the vnode.
-struct vnode *vfs_node_get(const struct vnode_ops *ops, void *data);
+struct vfs_fs_ops {
+  // Borrow private instance data, no outer locks/transaction.
+  // Return 0 and one unlocked backend root reference, or -1 with *out_node=0.
+  int (*root)(void *data, void **out_node);
+  // Optional for static private data. Called after the last instance/node ref.
+  // May sleep; no VFS table lock is held. Not a sync/flush guarantee.
+  void (*release)(void *data);
+};
+
+// Create one instance reference, or 0 if invalid/full. No disk I/O.
+// On success VFS takes responsibility for private data via fs_ops->release;
+// on failure the caller keeps it. Static data may omit the release callback.
+// Tables/data stay valid and their identities immutable until final release.
+// Node lock/unlock/read_at/getattr/release and fs root callbacks are required.
+struct vfs_fs *vfs_fs_create(const struct vfs_fs_ops *fs_ops,
+                            const struct vnode_ops *node_ops, void *data);
+
+// Borrow a live instance; caller owns one backend node reference.
+// No node lock or outer transaction. Success consumes the backend reference
+// and returns one vnode reference; failure leaves it with the caller.
+// Equal (instance, data) identifies the same live node. Every new vnode
+// retains its instance until AFTER releasing its backend node.
+struct vnode *vfs_node_get(struct vfs_fs *fs, void *data);
+
+// Once, after fsinit and before the first native root lookup.
+// Holds one permanent instance reference; no second native instance yet.
+void vfs_xv6_init(void);
+
+// Memory-only instance regression checks. Once before native init, no nodes
+// or instances live; process context, no spinlocks. Panics on failure.
+void vfs_selftest(void);
 
 // Acquire one unlocked native root vnode, or return 0 if wrapping fails.
-// Call after fsinit in process context, without spinlocks/node locks or an
+// Call after vfs_xv6_init in process context, without spinlocks/node locks or an
 // outer native transaction; wrapping/release may sleep. Caller vfs_put()s.
 struct vnode *vfs_xv6_root(void);
 

@@ -238,21 +238,12 @@ native_mknod(void *data, const char *name, uint len, int major, int minor)
 }
 
 static int
-native_same_fs(void *dir, void *target)
-{
-  struct inode *dp = dir, *ip = target;
-
-  // The native backend has one filesystem identity per device, no mounts yet.
-  return dp->dev == ip->dev;
-}
-
-static int
 native_link(void *dir, const char *name, uint len, void *target)
 {
   struct inode *dp = dir, *ip = target;
   char native_name[DIRSIZ];
 
-  if(len == 0 || !native_same_fs(dir, target))
+  if(len == 0 || dp->dev != ip->dev)
     return -1;
   native_component(native_name, name, len);
 
@@ -366,22 +357,44 @@ static const struct vnode_ops native_ops = {
   .create_file = native_create_file,
   .mkdir = native_mkdir,
   .mknod = native_mknod,
-  .same_fs = native_same_fs,
   .link = native_link,
   .unlink = native_unlink,
 };
 
+// fs.c/log.c still own singleton state. This instance describes ROOTDEV only;
+// it does not make a second native filesystem safe.
+static uint native_dev = ROOTDEV;
+static struct vfs_fs *native_fs;
+
+static int
+native_root(void *data, void **out_node)
+{
+  *out_node = 0;
+  if(*(uint *)data != ROOTDEV)
+    return -1;
+  *out_node = iroot();
+  return 0;
+}
+
+static const struct vfs_fs_ops native_fs_ops = {
+  .root = native_root,
+  // Private data is static; the boot owner retains this instance forever.
+};
+
+void
+vfs_xv6_init(void)
+{
+  if(native_fs != 0)
+    panic("vfs_xv6_init twice");
+  native_fs = vfs_fs_create(&native_fs_ops, &native_ops, &native_dev);
+  if(native_fs == 0)
+    panic("native instance");
+}
+
 struct vnode*
 vfs_xv6_root(void)
 {
-  struct inode *ip = iroot();
-  struct vnode *vn;
-
-  // Hand our owned inode reference directly to the vnode table.
-  vn = vfs_node_get(&native_ops, ip);
-  if(vn == 0)
-    native_release(ip);
-  return vn;
+  return vfs_fs_root(native_fs);
 }
 
 static struct vnode*
