@@ -8,7 +8,8 @@ struct file {
   struct pipe *pipe; // FD_PIPE
   struct vfs_path path; // FD_VNODE and FD_DEVICE; owns mount + vnode
   uint off;          // FD_VNODE
-  struct sleeplock poslock; // protects FD_VNODE offset and I/O
+  uint64 dircursor;  // opaque readdir cookie, independent of raw read offset
+  struct sleeplock poslock; // protects offsets, readdir cookie and I/O
   short major;       // FD_DEVICE
 };
 

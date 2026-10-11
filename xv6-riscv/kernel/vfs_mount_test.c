@@ -5,6 +5,7 @@
 #include "param.h"
 #include "stat.h"
 #include "vfs.h"
+#include "vfs_dirent.h"
 #include "vfs_backend.h"
 
 #define MT_NODES 7
@@ -25,6 +26,7 @@ struct mt_fs {
   int released;
   int unlinks;
   int links;
+  int readmode;
   struct mt_node nodes[MT_NODES];
 };
 
@@ -114,6 +116,48 @@ mt_lookup(void *data, const char *name, uint len, void **out)
   return 0;
 }
 
+// Use large opaque cookies to catch accidental narrowing to the read offset.
+static int
+mt_readdir(void *data, uint64 *cursor, struct vfs_dirent *out)
+{
+  struct mt_node *dir = data;
+  uint64 tag = (uint64)1 << 40;
+  int mode = dir->fs->readmode;
+  uint64 first = *cursor == 0 ? 1 : *cursor - tag + 1;
+
+  if(dir->type != T_DIR)
+    return -1;
+  if(mode){
+    memset(out, 0, sizeof(*out));
+    out->ino = 9;
+    out->type = T_FILE;
+    out->namelen = 1;
+    out->name[0] = mode == 2 ? '/' : 'x';
+    if(mode != 3)
+      *cursor = tag;
+    if(mode == 5)
+      out->type = 99;
+    if(mode == 6){
+      out->namelen = VFS_NAME_MAX;
+      memset(out->name, 'x', VFS_NAME_MAX);
+    }
+    return mode == 1 ? -1 : mode == 4 ? 0 : 1;
+  }
+  for(uint64 i = first; i < MT_NODES; i++){
+    struct mt_node *n = &dir->fs->nodes[i];
+    if(n->nlink && n->parent == dir - dir->fs->nodes){
+      memset(out, 0, sizeof(*out));
+      out->ino = i + 1;
+      out->type = n->type;
+      out->namelen = strlen(n->name);
+      memmove(out->name, n->name, out->namelen);
+      *cursor = tag + i;
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static int
 mt_unlink(void *data, const char *name, uint len)
 {
@@ -170,6 +214,7 @@ static const struct vnode_ops mt_node_ops = {
   .lookup = mt_lookup,
   .link = mt_link,
   .unlink = mt_unlink,
+  .readdir = mt_readdir,
 };
 
 static const struct vfs_fs_ops mt_fs_ops = {
@@ -202,6 +247,41 @@ mt_expect(const struct vfs_path *start, const char *name,
   if(r < 0 || st.dev != dev)
     panic("mount test device");
   vfs_path_put(&out);
+}
+
+static void
+mt_directory(const struct vfs_path *mounted)
+{
+  struct vfs_dirent de, saved;
+  uint64 cursor = 0;
+  if(vfs_readdir(mounted->vn, &cursor, &de) != 1 ||
+     cursor <= ((uint64)1 << 32) || strncmp(de.name, "visible", 8) ||
+     de.type != T_FILE)
+    panic("mount readdir first");
+  if(vfs_readdir(mounted->vn, &cursor, &de) != 1 ||
+     strncmp(de.name, "sub", 4) || de.type != T_DIR)
+    panic("mount readdir next");
+  uint64 end = cursor;
+  saved = de;
+  if(vfs_readdir(mounted->vn, &cursor, &de) != 0 || cursor != end ||
+     memcmp(&de, &saved, sizeof(de)))
+    panic("mount readdir EOF");
+  for(int mode = 1; mode <= 5; mode++){
+    mt_states[1].readmode = mode;
+    cursor = 0;
+    memset(&de, 0x5a, sizeof(de));
+    saved = de;
+    int r = vfs_readdir(mounted->vn, &cursor, &de);
+    if(r != (mode == 4 ? 0 : -1) || cursor ||
+       memcmp(&de, &saved, sizeof(de)))
+      panic("mount readdir failure state");
+  }
+  mt_states[1].readmode = 6;
+  cursor = 0;
+  if(vfs_readdir(mounted->vn, &cursor, &de) != 1 ||
+     de.namelen != VFS_NAME_MAX || de.name[VFS_NAME_MAX])
+    panic("mount readdir long name");
+  mt_states[1].readmode = 0;
 }
 
 static void
@@ -252,6 +332,7 @@ mt_round(void)
   if(a == 0 || vfs_path_walk(&root, "mnt", &mounted) < 0 ||
      mounted.mnt != a || vfs_path_walk(&mounted, "sub", &sub) < 0)
     panic("mount test attach");
+  mt_directory(&mounted);
   mt_expect(&root, "mnt/visible", a, 202);
   mt_expect(&root, "mnt2", base, 201);
   mt_expect(&root, "mnt/..", base, 201);

@@ -82,6 +82,18 @@ sys_read(void)
 }
 
 uint64
+sys_readdir(void)
+{
+  struct file *f;
+  uint64 addr;
+
+  argaddr(1, &addr);
+  if(argfd(0, 0, &f) < 0)
+    return -1;
+  return filereaddir(f, addr);
+}
+
+uint64
 sys_write(void)
 {
   struct file *f;

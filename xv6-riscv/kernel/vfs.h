@@ -13,6 +13,7 @@ struct vfs_path {
   struct vnode *vn;
 };
 struct stat;
+struct vfs_dirent;
 
 // Initialize VFS memory state; no disk I/O.
 void vfs_init(void);
@@ -90,6 +91,11 @@ int vfs_truncate_zero(struct vnode *vn);
 // name is one kernel path component of len bytes, without '/' or NUL.
 // Return one unlocked vnode reference, or 0 on failure.
 struct vnode *vfs_lookup(struct vnode *dir, const char *name, uint len);
+
+// Borrow a directory, no node lock/outer transaction. Backend locks internally.
+// cursor starts at zero and is opaque to callers. Return 1=entry, 0=EOF,
+// -1=error/unsupported. Only 1 updates cursor/out; output may not alias cursor.
+int vfs_readdir(struct vnode *dir, uint64 *cursor, struct vfs_dirent *out);
 
 // Borrow a path; lookup follows mounts and returns the resulting context.
 // create returns a node in the supplied parent context.

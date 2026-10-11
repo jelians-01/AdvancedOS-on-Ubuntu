@@ -9,6 +9,7 @@
 #include "file.h"
 #include "stat.h"
 #include "vfs.h"
+#include "vfs_dirent.h"
 #include "vfs_backend.h"
 
 static void
@@ -32,6 +33,44 @@ native_read_at(void *data, int user_dst, uint64 dst, uint off, uint n)
   if(ip->type != T_FILE && ip->type != T_DIR)
     return -1;
   return readi(ip, user_dst, dst, off, n);
+}
+
+static int
+native_readdir(void *data, uint64 *cursor, struct vfs_dirent *out)
+{
+  struct inode *dp = data;
+  struct dirent de;
+  uint64 off = *cursor;
+  int r = -1;
+
+  ilock(dp);
+  if(dp->type != T_DIR || off > (uint)-1 ||
+     off % sizeof(de) || dp->size % sizeof(de))
+    goto done;
+  while(off < dp->size){
+    if(readi(dp, 0, (uint64)&de, (uint)off, sizeof(de)) != sizeof(de))
+      goto done;
+    off += sizeof(de);
+    if(de.inum == 0)
+      continue;
+    uint len = 0;
+    while(len < DIRSIZ && de.name[len])
+      len++;
+    if(len == 0)
+      goto done;
+    memset(out, 0, sizeof(*out));
+    out->ino = de.inum;
+    out->type = VFS_DT_UNKNOWN;
+    out->namelen = len;
+    memmove(out->name, de.name, len);
+    *cursor = off;
+    r = 1;
+    goto done;
+  }
+  r = 0;
+done:
+  iunlock(dp);
+  return r;
 }
 
 static int
@@ -359,6 +398,7 @@ static const struct vnode_ops native_ops = {
   .mknod = native_mknod,
   .link = native_link,
   .unlink = native_unlink,
+  .readdir = native_readdir,
 };
 
 // fs.c/log.c still own singleton state. This instance describes ROOTDEV only;

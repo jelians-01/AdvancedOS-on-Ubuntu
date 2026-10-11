@@ -13,6 +13,7 @@
 #include "stat.h"
 #include "proc.h"
 #include "vfs.h"
+#include "vfs_dirent.h"
 
 struct devsw devsw[NDEV];
 struct {
@@ -42,6 +43,7 @@ filealloc(void)
     if(f->ref == 0){
       f->ref = 1;
       f->type = FD_NONE;
+      f->dircursor = 0;
       f->path = (struct vfs_path){0};
       release(&ftable.lock);
       return f;
@@ -149,6 +151,29 @@ fileread(struct file *f, uint64 addr, int n)
   return r;
 }
 
+// Enumerate one directory entry. Only a successful copy commits the cookie.
+int
+filereaddir(struct file *f, uint64 addr)
+{
+  struct vfs_dirent entry;
+  uint64 next;
+  int r;
+
+  if(!f->readable || f->type != FD_VNODE)
+    return -1;
+  acquiresleep(&f->poslock);
+  next = f->dircursor;
+  r = vfs_readdir(f->path.vn, &next, &entry);
+  if(r == 1){
+    if(copyout(myproc()->pagetable, addr, (char *)&entry, sizeof(entry)) < 0)
+      r = -1;
+    else
+      f->dircursor = next;
+  }
+  releasesleep(&f->poslock);
+  return r;
+}
+
 // Write to file f.
 // addr is a user virtual address.
 int
@@ -180,4 +205,3 @@ filewrite(struct file *f, uint64 addr, int n)
 
   return ret;
 }
-

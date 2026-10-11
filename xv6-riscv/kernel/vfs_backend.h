@@ -6,6 +6,7 @@ struct vnode;
 struct vfs_fs;
 struct vfs_path;
 struct stat;
+struct vfs_dirent;
 
 struct vnode_ops {
   void (*lock)(void *data);
@@ -39,6 +40,11 @@ struct vnode_ops {
   // Borrow dir; reject "."/".." and nonempty directories. Return 0/-1.
   // Release internal lookup references; do not consume the borrowed parent.
   int (*unlink)(void *dir, const char *name, uint len);
+  // Borrow dir, no outer node lock/transaction. Backend locks internally.
+  // Kernel buffers. cursor=0 starts enumeration; cookies are opaque uint64.
+  // 1=entry and changed cursor, 0=EOF, -1=error. Only 1 changes outputs.
+  // Full names, no truncation; type may be VFS_DT_UNKNOWN. No snapshot promise.
+  int (*readdir)(void *dir, uint64 *cursor, struct vfs_dirent *out);
 };
 
 struct vfs_fs_ops {

@@ -6,6 +6,7 @@
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "vfs.h"
+#include "vfs_dirent.h"
 #include "vfs_backend.h"
 
 // Backend fields are immutable while ref > 0.
@@ -284,6 +285,36 @@ vfs_lookup(struct vnode *dir, const char *name, uint len)
   if(vn == 0)
     dir->fs->node_ops->release(data);
   return vn;
+}
+
+int
+vfs_readdir(struct vnode *dir, uint64 *cursor, struct vfs_dirent *out)
+{
+  struct vfs_dirent entry;
+  uint64 next;
+  int r;
+
+  if(dir == 0 || cursor == 0 || out == 0 ||
+     dir->fs->node_ops->readdir == 0)
+    return -1;
+  next = *cursor;
+  memset(&entry, 0, sizeof(entry));
+  r = dir->fs->node_ops->readdir(dir->data, &next, &entry);
+  if(r == 0)
+    return 0;
+  if(r != 1 || next == *cursor || entry.namelen == 0 ||
+     entry.namelen > VFS_NAME_MAX || entry.name[entry.namelen] != 0 ||
+     (entry.type != VFS_DT_UNKNOWN && entry.type != T_DIR &&
+      entry.type != T_FILE && entry.type != T_DEVICE))
+    return -1;
+  for(uint i = 0; i < entry.namelen; i++)
+    if(entry.name[i] == 0 || entry.name[i] == '/')
+      return -1;
+  entry.reserved = 0;
+  memset(entry.name + entry.namelen, 0, sizeof(entry.name) - entry.namelen);
+  *out = entry;
+  *cursor = next;
+  return 1;
 }
 
 struct vnode*
