@@ -29,6 +29,12 @@ struct vnode *vfs_fs_root(struct vfs_fs *fs);
 // Create a detached context borrowing fs; owns a root vnode on success.
 // Does not attach it anywhere. May sleep; no outer locks/transaction.
 struct vfs_mount *vfs_mount_create(struct vfs_fs *fs);
+// Attach fs over a live directory in a root context; return an owned handle.
+// Reject root/duplicate/nested/overlapping/device-reused attachments.
+// Borrow both inputs; may sleep, no outer locks/transaction. Failure returns 0.
+// The caller retains this handle for the attachment's lifetime (boot owner).
+// No unmount syscall: final put removes an unused attachment and cleans up.
+struct vfs_mount *vfs_mount_attach(const struct vfs_path *at, struct vfs_fs *fs);
 struct vfs_mount *vfs_mount_dup(struct vfs_mount *mnt); // non-sleeping
 void vfs_mount_put(struct vfs_mount *mnt); // may sleep on final release
 
@@ -85,14 +91,16 @@ int vfs_truncate_zero(struct vnode *vn);
 // Return one unlocked vnode reference, or 0 on failure.
 struct vnode *vfs_lookup(struct vnode *dir, const char *name, uint len);
 
-// Borrow a path, retain its mount context in the returned child path.
+// Borrow a path; lookup follows mounts and returns the resulting context.
+// create returns a node in the supplied parent context.
 int vfs_path_lookup(const struct vfs_path *dir, const char *name, uint len,
                     struct vfs_path *out);
 int vfs_path_create(const struct vfs_path *dir, const char *name, uint len,
                     struct vfs_path *out);
 
 // Caller selects root for absolute names, cwd for relative names.
-// Leading '/' does not change start here. No mounted-directory crossing yet.
+// Leading '/' does not change start here. Lookup enters mounted directories
+// and resolves '..' from a mounted root through its covered directory.
 // Borrow start and a kernel string shorter than MAXPATH; empty path succeeds.
 // All path-producing operations return 0/-1 and obey the output rules above.
 int vfs_path_walk(const struct vfs_path *start, const char *path,
@@ -126,5 +134,9 @@ int vfs_link(struct vnode *dir, const char *name, uint len,
 // Reject "."/".."; open references keep an unlinked node alive.
 // Return 0/-1; no outer node lock or transaction.
 int vfs_unlink(struct vnode *dir, const char *name, uint len);
+
+// Namespace-aware unlink: refuses attached directories and serializes with
+// attachment publication. Use this for user paths, not raw vfs_unlink.
+int vfs_path_unlink(const struct vfs_path *dir, const char *name, uint len);
 
 #endif

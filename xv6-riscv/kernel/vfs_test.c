@@ -149,7 +149,7 @@ test_paths(void)
 
   memset(state, 0, sizeof(*state));
   state->root = root;
-  fs = vfs_fs_create(&test_fs_ops, &test_node_ops, state);
+  fs = vfs_fs_create(&test_fs_ops, &test_node_ops, 100, state);
   if(fs == 0)
     panic("vfs path setup");
   a = vfs_mount_create(fs);
@@ -211,7 +211,7 @@ test_paths(void)
   // leak the root reference it acquired before finding the table full.
   for(int cycle = 0; cycle < 2*NVMOUNT; cycle++){
     state->released = 0;
-    fs = vfs_fs_create(&test_fs_ops, &test_node_ops, state);
+    fs = vfs_fs_create(&test_fs_ops, &test_node_ops, 100, state);
     if(fs == 0)
       panic("vfs mount table setup");
     state->fail_root = 1;
@@ -256,13 +256,13 @@ vfs_selftest(void)
   for(int i = 0; i <= NVFS; i++)
     test_states[i].root = root;
 
-  if(vfs_fs_create(0, &test_node_ops, &test_states[0]) != 0 ||
-     vfs_fs_create(&test_fs_ops, 0, &test_states[0]) != 0 ||
+  if(vfs_fs_create(0, &test_node_ops, 100, &test_states[0]) != 0 ||
+     vfs_fs_create(&test_fs_ops, 0, 100, &test_states[0]) != 0 ||
      test_states[0].released)
     panic("vfs test invalid create");
 
-  a = vfs_fs_create(&test_fs_ops, &test_node_ops, &test_states[0]);
-  b = vfs_fs_create(&test_fs_ops, &test_node_ops, &test_states[1]);
+  a = vfs_fs_create(&test_fs_ops, &test_node_ops, 100, &test_states[0]);
+  b = vfs_fs_create(&test_fs_ops, &test_node_ops, 100, &test_states[1]);
   if(a == 0 || b == 0 || a == b || vfs_fs_dup(a) != a)
     panic("vfs test instances");
   vfs_fs_put(a); // Drop only the duplicate instance reference.
@@ -297,11 +297,11 @@ vfs_selftest(void)
   for(int i = 0; i <= NVFS; i++)
     test_states[i].root = root;
   for(int i = 0; i < NVFS; i++){
-    held_fs[i] = vfs_fs_create(&test_fs_ops, &test_node_ops, &test_states[i]);
+    held_fs[i] = vfs_fs_create(&test_fs_ops, &test_node_ops, 100, &test_states[i]);
     if(held_fs[i] == 0)
       panic("vfs test instance capacity");
   }
-  if(vfs_fs_create(&test_fs_ops, &test_node_ops, &test_states[NVFS]) != 0 ||
+  if(vfs_fs_create(&test_fs_ops, &test_node_ops, 100, &test_states[NVFS]) != 0 ||
      test_states[NVFS].released)
     panic("vfs test full instance table");
   for(int i = 0; i < NVFS; i++){
@@ -313,7 +313,7 @@ vfs_selftest(void)
   // Repeatedly reuse slots, rejecting a failed or non-directory root.
   for(int i = 0; i < 2*NVFS; i++){
     test_states[0].released = 0;
-    a = vfs_fs_create(&test_fs_ops, &test_node_ops, &test_states[0]);
+    a = vfs_fs_create(&test_fs_ops, &test_node_ops, 100, &test_states[0]);
     if(a == 0)
       panic("vfs test instance reuse");
     test_states[0].fail_root = 1;
@@ -330,7 +330,7 @@ vfs_selftest(void)
   }
 
   test_states[0].released = 0;
-  a = vfs_fs_create(&test_fs_ops, &test_node_ops, &test_states[0]);
+  a = vfs_fs_create(&test_fs_ops, &test_node_ops, 100, &test_states[0]);
   if(a == 0)
     panic("vfs test node capacity setup");
   for(int i = 0; i < NINODE; i++){
@@ -365,7 +365,7 @@ vfs_selftest(void)
 
   // Root wrapping must still succeed after the exhaustion tests.
   test_states[0].released = 0;
-  a = vfs_fs_create(&test_fs_ops, &test_node_ops, &test_states[0]);
+  a = vfs_fs_create(&test_fs_ops, &test_node_ops, 100, &test_states[0]);
   if(a == 0 || (x = vfs_fs_root(a)) == 0)
     panic("vfs test post-exhaustion reuse");
   vfs_fs_put(a);
@@ -374,4 +374,5 @@ vfs_selftest(void)
     panic("vfs test final cleanup");
   printf("vfs instances: ALL TESTS PASSED\n");
   test_paths();
+  vfs_mount_selftest();
 }

@@ -388,7 +388,7 @@ vfs_xv6_init(void)
 
   if(native_mount != 0)
     panic("vfs_xv6_init twice");
-  fs = vfs_fs_create(&native_fs_ops, &native_ops, &native_dev);
+  fs = vfs_fs_create(&native_fs_ops, &native_ops, native_dev, &native_dev);
   if(fs == 0)
     panic("native instance");
   native_mount = vfs_mount_create(fs);
@@ -522,7 +522,7 @@ vfs_xv6_unlink(const char *path)
 
   if(native_parent(path, &parent, &name, &len) < 0)
     return -1;
-  r = vfs_unlink(parent.vn, name, len);
+  r = vfs_path_unlink(&parent, name, len);
   vfs_path_put(&parent);
   return r;
 }

@@ -4,6 +4,7 @@
 #include "param.h"
 #include "stat.h"
 #include "spinlock.h"
+#include "sleeplock.h"
 #include "vfs.h"
 #include "vfs_backend.h"
 
@@ -13,12 +14,14 @@ struct vfs_fs {
   int ref;
   const struct vfs_fs_ops *ops;
   const struct vnode_ops *node_ops;
+  uint dev;
   void *data;
 };
 
 struct vfs_mount {
   int ref;
   struct vnode *root; // owns a vnode reference, which retains its instance
+  struct vfs_path covered; // owns the parent context and covered directory
 };
 
 struct vnode {
@@ -34,15 +37,20 @@ static struct {
   struct vfs_mount mounts[NVMOUNT];
 } vtable;
 
+// Order: namespace lock -> backend transaction/node locks. No backend may
+// acquire this lock. vtable.lock is never held across backend calls.
+static struct sleeplock namespace_lock;
+
 void
 vfs_init(void)
 {
   initlock(&vtable.lock, "vtable");
+  initsleeplock(&namespace_lock, "vfsnamespace");
 }
 
 struct vfs_fs*
 vfs_fs_create(const struct vfs_fs_ops *fs_ops,
-              const struct vnode_ops *node_ops, void *data)
+              const struct vnode_ops *node_ops, uint dev, void *data)
 {
   struct vfs_fs *fs;
 
@@ -56,6 +64,7 @@ vfs_fs_create(const struct vfs_fs_ops *fs_ops,
     if(fs->ref == 0){
       fs->ops = fs_ops;
       fs->node_ops = node_ops;
+      fs->dev = dev;
       fs->data = data;
       fs->ref = 1;
       release(&vtable.lock);
@@ -341,6 +350,7 @@ vfs_mount_create(struct vfs_fs *fs)
   for(mnt = vtable.mounts; mnt < vtable.mounts + NVMOUNT; mnt++){
     if(mnt->ref == 0){
       mnt->root = root;
+      mnt->covered = (struct vfs_path){0};
       mnt->ref = 1;
       release(&vtable.lock);
       return mnt;
@@ -366,6 +376,7 @@ void
 vfs_mount_put(struct vfs_mount *mnt)
 {
   struct vnode *root;
+  struct vfs_path covered;
 
   acquire(&vtable.lock);
   if(mnt == 0 || mnt->ref < 1)
@@ -375,9 +386,12 @@ vfs_mount_put(struct vfs_mount *mnt)
     return;
   }
   root = mnt->root;
+  covered = mnt->covered;
   mnt->root = 0;
+  mnt->covered = (struct vfs_path){0};
   release(&vtable.lock);
   vfs_put(root);
+  vfs_path_put(&covered);
 }
 
 int
@@ -415,17 +429,175 @@ vfs_path_put(struct vfs_path *path)
     vfs_mount_put(old.mnt);
 }
 
+// Return 1 if ancestor contains node in this backend tree, 0 if not,
+// or -1 for malformed/deeper-than-MAXPATH ancestry. Caller holds namespace_lock.
+static int
+mount_ancestor(struct vnode *root, struct vnode *ancestor, struct vnode *node)
+{
+  struct vnode *cur = vfs_dup(node), *next;
+  int result = -1;
+
+  for(int depth = 0; depth < MAXPATH; depth++){
+    if(cur == ancestor){
+      result = 1;
+      break;
+    }
+    if(cur == root){
+      result = 0;
+      break;
+    }
+    next = vfs_lookup(cur, "..", 2);
+    if(next == 0)
+      break;
+    if(next == cur){
+      vfs_put(next);
+      break;
+    }
+    vfs_put(cur);
+    cur = next;
+  }
+  vfs_put(cur);
+  return result;
+}
+
+struct vfs_mount*
+vfs_mount_attach(const struct vfs_path *at, struct vfs_fs *fs)
+{
+  struct vfs_mount *mnt, *other;
+  struct vfs_path existing[NVMOUNT];
+  struct stat st;
+  int count = 0, bad = 0, r;
+
+  if(at == 0 || at->mnt == 0 || at->vn == 0 || fs == 0 ||
+     at->vn->fs != at->mnt->root->fs)
+    return 0;
+  mnt = vfs_mount_create(fs);
+  if(mnt == 0)
+    return 0;
+  acquiresleep(&namespace_lock);
+  // Only a root context can receive a mount. No root overlay or nesting.
+  if(at->mnt->covered.vn || at->vn == at->mnt->root)
+    bad = 1;
+  vfs_lock(at->vn);
+  r = vfs_getattr(at->vn, &st);
+  vfs_unlock(at->vn);
+  if(r < 0 || st.type != T_DIR || st.nlink < 1)
+    bad = 1;
+
+  acquire(&vtable.lock);
+  for(other = vtable.mounts; other < vtable.mounts + NVMOUNT; other++){
+    if(other->ref == 0 || other == mnt)
+      continue;
+    // Conservative first version: all device sharing is rejected, including
+    // different instances describing the same device and detached contexts.
+    if(other->root->fs->dev == fs->dev)
+      bad = 1;
+    if(other->covered.vn && other->covered.mnt == at->mnt){
+      existing[count] = other->covered;
+      existing[count].mnt->ref++;
+      existing[count].vn->ref++;
+      count++;
+    }
+  }
+  release(&vtable.lock);
+
+  // Also reject mounting an ancestor over an already attached descendant.
+  // This check handles stale/raw paths into a subtree already mounted over.
+  for(int i = 0; i < count; i++){
+    if(!bad &&
+       (mount_ancestor(at->mnt->root, at->vn, existing[i].vn) != 0 ||
+        mount_ancestor(at->mnt->root, existing[i].vn, at->vn) != 0))
+      bad = 1;
+    vfs_path_put(&existing[i]);
+  }
+  if(!bad){
+    struct vfs_path covered = vfs_path_dup(at);
+    acquire(&vtable.lock);
+    mnt->covered = covered; // Publish immutable attachment metadata.
+    release(&vtable.lock);
+  }
+  releasesleep(&namespace_lock);
+  if(bad){
+    vfs_mount_put(mnt);
+    return 0;
+  }
+  return mnt;
+}
+
+// Replace a backend child with the mounted root, if any. Snapshot owned refs
+// under the table lock, then release the covered path outside it.
+static void
+vfs_follow_mount(struct vfs_path *path)
+{
+  struct vfs_mount *mnt;
+  struct vfs_path next = {0};
+
+  acquire(&vtable.lock);
+  for(mnt = vtable.mounts; mnt < vtable.mounts + NVMOUNT; mnt++){
+    if(mnt->ref > 0 && mnt->covered.mnt == path->mnt &&
+       mnt->covered.vn == path->vn){
+      mnt->ref++;
+      mnt->root->ref++;
+      next.mnt = mnt;
+      next.vn = mnt->root;
+      break;
+    }
+  }
+  release(&vtable.lock);
+  if(next.vn){
+    vfs_path_put(path);
+    *path = next;
+  }
+}
+
+int
+vfs_path_unlink(const struct vfs_path *dir, const char *name, uint len)
+{
+  struct vnode *target;
+  struct vfs_mount *mnt;
+  int busy = 0, r = -1;
+
+  if(dir == 0 || dir->mnt == 0 || dir->vn == 0 ||
+     !valid_component(name, len) ||
+     (len == 1 && name[0] == '.') ||
+     (len == 2 && name[0] == '.' && name[1] == '.'))
+    return -1;
+  acquiresleep(&namespace_lock);
+  // Lookup the covered inode directly, without following mounts.
+  target = vfs_lookup(dir->vn, name, len);
+  if(target){
+    acquire(&vtable.lock);
+    for(mnt = vtable.mounts; mnt < vtable.mounts + NVMOUNT; mnt++)
+      if(mnt->ref > 0 && mnt->covered.vn == target)
+        busy = 1;
+    release(&vtable.lock);
+    if(!busy)
+      r = vfs_unlink(dir->vn, name, len);
+    vfs_put(target);
+  }
+  releasesleep(&namespace_lock);
+  return r;
+}
+
 int
 vfs_path_lookup(const struct vfs_path *dir, const char *name, uint len,
                 struct vfs_path *out)
 {
+  const struct vfs_path *base = dir;
+
   *out = (struct vfs_path){0};
-  if(dir->mnt == 0 || dir->vn == 0)
+  if(dir == 0 || dir->mnt == 0 || dir->vn == 0)
     return -1;
-  out->vn = vfs_lookup(dir->vn, name, len);
+  // /mnt/.. means the parent of the covered directory, not the covered
+  // directory itself. An owned input mount keeps covered immutable/alive.
+  if(name && len == 2 && name[0] == '.' && name[1] == '.' &&
+     dir->vn == dir->mnt->root && dir->mnt->covered.vn)
+    base = &dir->mnt->covered;
+  out->vn = vfs_lookup(base->vn, name, len);
   if(out->vn == 0)
     return -1;
-  out->mnt = vfs_mount_dup(dir->mnt);
+  out->mnt = vfs_mount_dup(base->mnt);
+  vfs_follow_mount(out);
   return 0;
 }
 
@@ -493,7 +665,7 @@ vfs_walk_path(const struct vfs_path *start, const char *path,
       *out = current;
       return 0;
     }
-    // Every component retains its mount, even when two mounts share a vnode.
+    // Each component carries its mount context across namespace transitions.
     int r = vfs_path_lookup(&current, name, len, &next);
     vfs_path_put(&current);
     if(r < 0)

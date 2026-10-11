@@ -54,9 +54,10 @@ struct vfs_fs_ops {
 // On success VFS takes responsibility for private data via fs_ops->release;
 // on failure the caller keeps it. Static data may omit the release callback.
 // Tables/data stay valid and their identities immutable until final release.
+// dev is the immutable logical device identity, not a filesystem type.
 // Node lock/unlock/read_at/getattr/release and fs root callbacks are required.
 struct vfs_fs *vfs_fs_create(const struct vfs_fs_ops *fs_ops,
-                            const struct vnode_ops *node_ops, void *data);
+                            const struct vnode_ops *node_ops, uint dev, void *data);
 
 // Borrow a live instance; caller owns one backend node reference.
 // No node lock or outer transaction. Success consumes the backend reference
@@ -72,11 +73,12 @@ void vfs_xv6_init(void);
 // Memory-only instance regression checks. Once before native init, no nodes
 // or instances live; process context, no spinlocks. Panics on failure.
 void vfs_selftest(void);
+void vfs_mount_selftest(void);
 
 // Return an owned root/lookup/create path; 0 on success, -1 on failure.
 // out must be non-null and empty. Failure leaves it empty.
 // Call after vfs_xv6_init, without spinlocks/node locks/outer transactions.
-// The caller eventually vfs_path_put()s; no mounted directories yet.
+// The caller eventually vfs_path_put()s; lookup preserves mount crossings.
 int vfs_xv6_root(struct vfs_path *out);
 int vfs_xv6_lookup_path(const char *path, struct vfs_path *out);
 // Native compatibility: an existing device can satisfy O_CREATE.

@@ -25,6 +25,7 @@ OBJS = \
   $K/file.o \
   $K/vfs.o \
   $K/vfs_test.o \
+  $K/vfs_mount_test.o \
   $K/vfs_xv6.o \
   $K/pipe.o \
   $K/exec.o \
