@@ -4,6 +4,7 @@
 // Backend interface. Include types.h first.
 struct vnode;
 struct vfs_fs;
+struct vfs_path;
 struct stat;
 
 struct vnode_ops {
@@ -65,27 +66,21 @@ struct vfs_fs *vfs_fs_create(const struct vfs_fs_ops *fs_ops,
 struct vnode *vfs_node_get(struct vfs_fs *fs, void *data);
 
 // Once, after fsinit and before the first native root lookup.
-// Holds one permanent instance reference; no second native instance yet.
+// Holds one permanent root mount reference; no second native instance yet.
 void vfs_xv6_init(void);
 
 // Memory-only instance regression checks. Once before native init, no nodes
 // or instances live; process context, no spinlocks. Panics on failure.
 void vfs_selftest(void);
 
-// Acquire one unlocked native root vnode, or return 0 if wrapping fails.
-// Call after vfs_xv6_init in process context, without spinlocks/node locks or an
-// outer native transaction; wrapping/release may sleep. Caller vfs_put()s.
-struct vnode *vfs_xv6_root(void);
-
-// Resolve an absolute/relative path using the native root/vnode cwd.
-// Return one unlocked vnode reference or 0; caller eventually vfs_put()s.
-// No node lock or outer native transaction. Single-root bridge until mounts.
-struct vnode *vfs_xv6_lookup_path(const char *path);
-
-// Find the parent via VFS, then create/open a regular file in that directory.
-// Return one unlocked vnode reference or 0; caller eventually vfs_put()s.
-// No node lock or outer native transaction; existing devices are compatible.
-struct vnode *vfs_xv6_create_file(const char *path);
+// Return an owned root/lookup/create path; 0 on success, -1 on failure.
+// out must be non-null and empty. Failure leaves it empty.
+// Call after vfs_xv6_init, without spinlocks/node locks/outer transactions.
+// The caller eventually vfs_path_put()s; no mounted directories yet.
+int vfs_xv6_root(struct vfs_path *out);
+int vfs_xv6_lookup_path(const char *path, struct vfs_path *out);
+// Native compatibility: an existing device can satisfy O_CREATE.
+int vfs_xv6_create_file(const char *path, struct vfs_path *out);
 
 // Native-only path bridges for mkdir/mknod. No outer lock/transaction.
 // Return 0/-1; no reference is transferred to the caller.

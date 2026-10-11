@@ -4,6 +4,14 @@
 // Include types.h before this header.
 struct vnode;
 struct vfs_fs;
+struct vfs_mount;
+
+// Owned pair. Initialize to {0}; copying fields transfers ownership only.
+// Use vfs_path_dup for a second owner, vfs_path_put to release and clear.
+struct vfs_path {
+  struct vfs_mount *mnt;
+  struct vnode *vn;
+};
 struct stat;
 
 // Initialize VFS memory state; no disk I/O.
@@ -17,6 +25,21 @@ void vfs_fs_put(struct vfs_fs *fs);
 // Borrow a live instance; return one unlocked directory vnode reference or 0.
 // No node lock or outer transaction. Root lookup/release may sleep.
 struct vnode *vfs_fs_root(struct vfs_fs *fs);
+
+// Create a detached context borrowing fs; owns a root vnode on success.
+// Does not attach it anywhere. May sleep; no outer locks/transaction.
+struct vfs_mount *vfs_mount_create(struct vfs_fs *fs);
+struct vfs_mount *vfs_mount_dup(struct vfs_mount *mnt); // non-sleeping
+void vfs_mount_put(struct vfs_mount *mnt); // may sleep on final release
+
+// Borrow a live mount, return an owned root pair in empty *out.
+// Path output arguments below must be non-null, empty and not alias inputs.
+// Success 0, failure -1 with *out empty. No outer locks/transaction.
+int vfs_mount_root(struct vfs_mount *mnt, struct vfs_path *out);
+// Borrow a valid path; acquire both references. Does not sleep.
+struct vfs_path vfs_path_dup(const struct vfs_path *path);
+// Consume/clear both references; empty paths are allowed. May sleep.
+void vfs_path_put(struct vfs_path *path);
 
 // Caller must already hold a valid vnode reference.
 struct vnode *vfs_dup(struct vnode *vn);
@@ -62,20 +85,23 @@ int vfs_truncate_zero(struct vnode *vn);
 // Return one unlocked vnode reference, or 0 on failure.
 struct vnode *vfs_lookup(struct vnode *dir, const char *name, uint len);
 
-// Single-root transition: caller selects root for absolute paths or cwd
-// for relative paths. Leading '/' does not change start inside this helper.
-// Borrow start; path is a kernel string shorter than MAXPATH.
-// Return one unlocked reference, including for an empty path, or 0.
-// No node lock or outer native transaction; no mount traversal yet.
-struct vnode *vfs_walk(struct vnode *start, const char *path);
+// Borrow a path, retain its mount context in the returned child path.
+int vfs_path_lookup(const struct vfs_path *dir, const char *name, uint len,
+                    struct vfs_path *out);
+int vfs_path_create(const struct vfs_path *dir, const char *name, uint len,
+                    struct vfs_path *out);
 
-// Like vfs_walk, but stop at the parent directory of the final component.
-// On success, *name borrows a slice of path, *len is its full byte length,
-// and the caller owns one unlocked parent reference. Keep path alive.
-// On failure return 0 and clear both outputs. Empty/all-slash paths fail.
-// name and len must be non-null. No node lock or outer transaction.
-struct vnode *vfs_walk_parent(struct vnode *start, const char *path,
-                              const char **name, uint *len);
+// Caller selects root for absolute names, cwd for relative names.
+// Leading '/' does not change start here. No mounted-directory crossing yet.
+// Borrow start and a kernel string shorter than MAXPATH; empty path succeeds.
+// All path-producing operations return 0/-1 and obey the output rules above.
+int vfs_path_walk(const struct vfs_path *start, const char *path,
+                  struct vfs_path *out);
+// Return the parent and a borrowed slice of path (keep path alive).
+// Empty/all-slash paths fail; failure clears *name and *len as well as *out.
+// name and len are required, non-null outputs.
+int vfs_path_parent(const struct vfs_path *start, const char *path,
+                    struct vfs_path *out, const char **name, uint *len);
 
 // Borrow dir; atomically find or create a regular file under that directory.
 // Return one unlocked vnode reference or 0. Does not truncate existing files.

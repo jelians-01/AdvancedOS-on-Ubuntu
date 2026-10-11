@@ -1,10 +1,12 @@
+#include "vfs.h"
+
 struct file {
   enum { FD_NONE, FD_PIPE, FD_VNODE, FD_DEVICE } type;
   int ref; // reference count
   char readable;
   char writable;
   struct pipe *pipe; // FD_PIPE
-  struct vnode *vn;  // FD_VNODE and FD_DEVICE; owns one VFS reference
+  struct vfs_path path; // FD_VNODE and FD_DEVICE; owns mount + vnode
   uint off;          // FD_VNODE
   struct sleeplock poslock; // protects FD_VNODE offset and I/O
   short major;       // FD_DEVICE

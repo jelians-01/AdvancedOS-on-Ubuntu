@@ -149,19 +149,21 @@ sys_open(void)
   int fd, omode, r, major = -1;
   struct file *f;
   struct vnode *vn;
+  struct vfs_path opened = {0};
   struct stat st;
 
   argint(1, &omode);
   if(argstr(0, path, MAXPATH) < 0)
     return -1;
 
-  // Own one vnode reference until it is handed to the open file.
+  // Own the mount and vnode until both are handed to the open file.
   if(omode & O_CREATE)
-    vn = vfs_xv6_create_file(path);
+    r = vfs_xv6_create_file(path, &opened);
   else
-    vn = vfs_xv6_lookup_path(path);
-  if(vn == 0)
+    r = vfs_xv6_lookup_path(path, &opened);
+  if(r < 0)
     return -1;
+  vn = opened.vn; // Borrowed while opened (then f->path) owns it.
 
   vfs_lock(vn);
   r = vfs_getattr(vn, &st);
@@ -172,7 +174,7 @@ sys_open(void)
      (st.type != T_FILE && st.type != T_DIR && st.type != T_DEVICE) ||
      (st.type == T_DIR && omode != O_RDONLY) ||
      (st.type == T_DEVICE && (major < 0 || major >= NDEV))){
-    vfs_put(vn);
+    vfs_path_put(&opened);
     return -1;
   }
 
@@ -180,12 +182,12 @@ sys_open(void)
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
     if(f)
       fileclose(f);
-    vfs_put(vn);
+    vfs_path_put(&opened);
     return -1;
   }
 
   f->type = st.type == T_DEVICE ? FD_DEVICE : FD_VNODE;
-  f->vn = vn;
+  f->path = opened; // Transfer both references; no extra dup.
   f->major = major;
   f->off = 0;
   f->readable = !(omode & O_WRONLY);
@@ -228,27 +230,26 @@ uint64
 sys_chdir(void)
 {
   char path[MAXPATH];
-  struct vnode *vn, *old;
+  struct vfs_path next = {0}, old;
   struct stat st;
   struct proc *p = myproc();
   int r;
 
   if(argstr(0, path, MAXPATH) < 0)
     return -1;
-  if((vn = vfs_xv6_lookup_path(path)) == 0)
+  if(vfs_xv6_lookup_path(path, &next) < 0)
     return -1;
-  vfs_lock(vn);
-  r = vfs_getattr(vn, &st);
-  vfs_unlock(vn);
+  vfs_lock(next.vn);
+  r = vfs_getattr(next.vn, &st);
+  vfs_unlock(next.vn);
   if(r < 0 || st.type != T_DIR){
-    vfs_put(vn);
+    vfs_path_put(&next);
     return -1;
   }
-  // Publish the new owned reference before releasing the old one.
-  // xv6 has no threads sharing this proc; no process lock is needed here.
+  // Transfer both references; xv6 has no threads sharing this proc.
   old = p->cwd;
-  p->cwd = vn;
-  vfs_put(old);
+  p->cwd = next;
+  vfs_path_put(&old);
   return 0;
 }
 

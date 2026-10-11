@@ -364,7 +364,7 @@ static const struct vnode_ops native_ops = {
 // fs.c/log.c still own singleton state. This instance describes ROOTDEV only;
 // it does not make a second native filesystem safe.
 static uint native_dev = ROOTDEV;
-static struct vfs_fs *native_fs;
+static struct vfs_mount *native_mount;
 
 static int
 native_root(void *data, void **out_node)
@@ -378,146 +378,151 @@ native_root(void *data, void **out_node)
 
 static const struct vfs_fs_ops native_fs_ops = {
   .root = native_root,
-  // Private data is static; the boot owner retains this instance forever.
+  // Static private data needs no destructor; the root mount retains it.
 };
 
 void
 vfs_xv6_init(void)
 {
-  if(native_fs != 0)
+  struct vfs_fs *fs;
+
+  if(native_mount != 0)
     panic("vfs_xv6_init twice");
-  native_fs = vfs_fs_create(&native_fs_ops, &native_ops, &native_dev);
-  if(native_fs == 0)
+  fs = vfs_fs_create(&native_fs_ops, &native_ops, &native_dev);
+  if(fs == 0)
     panic("native instance");
+  native_mount = vfs_mount_create(fs);
+  vfs_fs_put(fs); // The mount's root now keeps the instance alive.
+  if(native_mount == 0)
+    panic("native root mount");
 }
 
-struct vnode*
-vfs_xv6_root(void)
+int
+vfs_xv6_root(struct vfs_path *out)
 {
-  return vfs_fs_root(native_fs);
+  return vfs_mount_root(native_mount, out);
 }
 
-static struct vnode*
-native_start(const char *path)
+static int
+native_start(const char *path, struct vfs_path *out)
 {
+  *out = (struct vfs_path){0};
   if(path == 0)
-    return 0;
+    return -1;
   if(*path == '/')
-    return vfs_xv6_root();
-  if(myproc()->cwd == 0)
-    return 0;
-  return vfs_dup(myproc()->cwd);
+    return vfs_xv6_root(out);
+  if(myproc()->cwd.vn == 0)
+    return -1;
+  *out = vfs_path_dup(&myproc()->cwd);
+  return 0;
 }
 
-struct vnode*
-vfs_xv6_lookup_path(const char *path)
+int
+vfs_xv6_lookup_path(const char *path, struct vfs_path *out)
 {
-  struct vnode *start, *vn;
+  struct vfs_path start = {0};
+  int r;
 
-  start = native_start(path);
-  if(start == 0)
-    return 0;
-  vn = vfs_walk(start, path);
-  vfs_put(start);
-  return vn;
+  *out = (struct vfs_path){0};
+  if(native_start(path, &start) < 0)
+    return -1;
+  r = vfs_path_walk(&start, path, out);
+  vfs_path_put(&start);
+  return r;
 }
 
-static struct vnode*
-native_parent(const char *path, const char **name, uint *len)
+static int
+native_parent(const char *path, struct vfs_path *out,
+              const char **name, uint *len)
 {
-  struct vnode *start, *parent;
+  struct vfs_path start = {0};
+  int r;
 
-  start = native_start(path);
-  if(start == 0)
-    return 0;
-  parent = vfs_walk_parent(start, path, name, len);
-  vfs_put(start);
-  return parent;
+  *out = (struct vfs_path){0};
+  *name = 0;
+  *len = 0;
+  if(native_start(path, &start) < 0)
+    return -1;
+  r = vfs_path_parent(&start, path, out, name, len);
+  vfs_path_put(&start);
+  return r;
 }
 
-struct vnode*
-vfs_xv6_create_file(const char *path)
+int
+vfs_xv6_create_file(const char *path, struct vfs_path *out)
 {
-  struct vnode *parent, *vn;
+  struct vfs_path parent = {0};
   const char *name;
   uint len;
+  int r;
 
-  parent = native_parent(path, &name, &len);
-  if(parent == 0)
-    return 0;
-  vn = vfs_create_file(parent, name, len);
-  vfs_put(parent);
-  return vn;
+  *out = (struct vfs_path){0};
+  if(native_parent(path, &parent, &name, &len) < 0)
+    return -1;
+  r = vfs_path_create(&parent, name, len, out);
+  vfs_path_put(&parent);
+  return r;
 }
 
 int
 vfs_xv6_mkdir(const char *path)
 {
-  struct vnode *parent;
+  struct vfs_path parent = {0};
   const char *name;
   uint len;
   int r;
 
-  parent = native_parent(path, &name, &len);
-  if(parent == 0)
+  if(native_parent(path, &parent, &name, &len) < 0)
     return -1;
-  r = vfs_mkdir(parent, name, len);
-  vfs_put(parent);
+  r = vfs_mkdir(parent.vn, name, len);
+  vfs_path_put(&parent);
   return r;
 }
 
 int
 vfs_xv6_mknod(const char *path, int major, int minor)
 {
-  struct vnode *parent;
+  struct vfs_path parent = {0};
   const char *name;
   uint len;
   int r;
 
-  parent = native_parent(path, &name, &len);
-  if(parent == 0)
+  if(native_parent(path, &parent, &name, &len) < 0)
     return -1;
-  r = vfs_mknod(parent, name, len, major, minor);
-  vfs_put(parent);
+  r = vfs_mknod(parent.vn, name, len, major, minor);
+  vfs_path_put(&parent);
   return r;
 }
 
 int
 vfs_xv6_link(const char *oldpath, const char *newpath)
 {
-  struct vnode *start, *target, *parent;
+  struct vfs_path target = {0}, parent = {0};
   const char *name;
   uint len;
   int r = -1;
 
-  start = native_start(oldpath);
-  if(start == 0)
+  if(vfs_xv6_lookup_path(oldpath, &target) < 0)
     return -1;
-  target = vfs_walk(start, oldpath);
-  vfs_put(start);
-  if(target == 0)
-    return -1;
-  parent = native_parent(newpath, &name, &len);
-  if(parent){
-    r = vfs_link(parent, name, len, target);
-    vfs_put(parent);
+  if(native_parent(newpath, &parent, &name, &len) == 0){
+    r = vfs_link(parent.vn, name, len, target.vn);
+    vfs_path_put(&parent);
   }
-  vfs_put(target);
+  vfs_path_put(&target);
   return r;
 }
 
 int
 vfs_xv6_unlink(const char *path)
 {
-  struct vnode *parent;
+  struct vfs_path parent = {0};
   const char *name;
   uint len;
   int r;
 
-  parent = native_parent(path, &name, &len);
-  if(parent == 0)
+  if(native_parent(path, &parent, &name, &len) < 0)
     return -1;
-  r = vfs_unlink(parent, name, len);
-  vfs_put(parent);
+  r = vfs_unlink(parent.vn, name, len);
+  vfs_path_put(&parent);
   return r;
 }

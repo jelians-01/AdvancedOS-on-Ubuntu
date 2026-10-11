@@ -78,6 +78,9 @@ test_lookup(void *data, const char *name, uint len, void **out_node)
 {
   struct test_node *node = data;
 
+  *out_node = 0;
+  if(len == 7 && strncmp(name, "missing", len) == 0)
+    return -1;
   node->refs++;
   *out_node = node;
   return 0;
@@ -129,6 +132,114 @@ static const struct vfs_fs_ops test_fs_ops = {
   .root = test_root,
   .release = test_fs_put,
 };
+
+// Two detached mounts may share the same vnode, but paths must not lose
+// their distinct context. No directory attachment is implemented here.
+static void
+test_paths(void)
+{
+  struct test_node *root = &test_nodes[NINODE];
+  struct test_fs *state = &test_states[0];
+  struct vfs_fs *fs;
+  struct vfs_mount *a, *b, *held[NVMOUNT];
+  struct vfs_path x = {0}, y = {0}, copy = {0}, out = {0};
+  const char *name;
+  uint len;
+  char longpath[MAXPATH + 1];
+
+  memset(state, 0, sizeof(*state));
+  state->root = root;
+  fs = vfs_fs_create(&test_fs_ops, &test_node_ops, state);
+  if(fs == 0)
+    panic("vfs path setup");
+  a = vfs_mount_create(fs);
+  b = vfs_mount_create(fs);
+  if(a == 0 || b == 0 || a == b ||
+     vfs_mount_root(a, &x) < 0 || vfs_mount_root(b, &y) < 0 ||
+     x.vn != y.vn || x.mnt == y.mnt || root->refs != 1)
+    panic("vfs path mount identity");
+  vfs_fs_put(fs);
+  vfs_mount_put(a);
+  vfs_mount_put(b);
+  if(state->released)
+    panic("vfs path lifetime");
+
+  copy = vfs_path_dup(&x);
+  vfs_path_put(&x);
+  if(x.vn || x.mnt || copy.vn != y.vn || copy.mnt == y.mnt)
+    panic("vfs path dup or clear");
+  vfs_path_put(&x); // Releasing an empty path is harmless.
+  for(int i = 0; i < 2*NVMOUNT; i++){
+    if(vfs_path_walk(&copy, "///x/./../x", &out) < 0 ||
+       out.vn != copy.vn || out.mnt != copy.mnt)
+      panic("vfs path walk context");
+    vfs_path_put(&out);
+    if(vfs_path_walk(&y, "", &out) < 0 ||
+       out.vn != y.vn || out.mnt != y.mnt)
+      panic("vfs path empty walk");
+    vfs_path_put(&out);
+    if(vfs_path_parent(&copy, "x/child", &out, &name, &len) < 0 ||
+       out.mnt != copy.mnt || out.vn != copy.vn ||
+       len != 5 || strncmp(name, "child", len) != 0)
+      panic("vfs path parent");
+    vfs_path_put(&out);
+    if(vfs_path_walk(&copy, "x/missing/child", &out) != -1 ||
+       out.mnt || out.vn)
+      panic("vfs path failed walk");
+    if(vfs_path_parent(&copy, "missing/child", &out, &name, &len) != -1 ||
+       out.mnt || out.vn || name || len)
+      panic("vfs path failed parent");
+    if(vfs_path_parent(&copy, "///", &out, &name, &len) != -1 ||
+       out.mnt || out.vn || name || len)
+      panic("vfs path missing basename");
+    if(vfs_path_create(&copy, "x", 1, &out) != -1 || out.vn || out.mnt)
+      panic("vfs path unsupported create");
+  }
+  memset(longpath, 'x', sizeof(longpath));
+  longpath[MAXPATH] = 0;
+  if(vfs_path_walk(&copy, longpath, &out) != -1 || out.vn || out.mnt ||
+     vfs_path_walk(&x, "x", &out) != -1 || out.vn || out.mnt)
+    panic("vfs path invalid walk");
+  vfs_path_put(&copy);
+  if(state->released)
+    panic("vfs path other mount lifetime");
+  vfs_path_put(&y);
+  if(root->refs || state->released != 1)
+    panic("vfs path cleanup");
+
+  // Fill and recycle every context slot; a failed allocation must not
+  // leak the root reference it acquired before finding the table full.
+  for(int cycle = 0; cycle < 2*NVMOUNT; cycle++){
+    state->released = 0;
+    fs = vfs_fs_create(&test_fs_ops, &test_node_ops, state);
+    if(fs == 0)
+      panic("vfs mount table setup");
+    state->fail_root = 1;
+    if(vfs_mount_create(fs) != 0 || root->refs)
+      panic("vfs mount failed root");
+    state->fail_root = 0;
+    for(int i = 0; i < NVMOUNT; i++){
+      held[i] = vfs_mount_create(fs);
+      if(held[i] == 0)
+        panic("vfs mount capacity");
+    }
+    if(vfs_mount_create(fs) != 0 || root->refs != 1)
+      panic("vfs mount full table");
+    vfs_mount_put(held[0]);
+    held[0] = vfs_mount_create(fs);
+    if(held[0] == 0 || vfs_mount_root(held[0], &out) < 0)
+      panic("vfs mount reuse");
+    vfs_fs_put(fs);
+    for(int i = 0; i < NVMOUNT; i++)
+      vfs_mount_put(held[i]);
+    if(state->released || root->refs != 1)
+      panic("vfs path retains final mount");
+    vfs_path_put(&out);
+    if(state->released != 1 || root->refs)
+      panic("vfs mount final cleanup");
+  }
+  printf("vfs paths: ALL TESTS PASSED\n");
+}
 
 void
 vfs_selftest(void)
@@ -262,4 +373,5 @@ vfs_selftest(void)
   if(root->refs || test_states[0].released != 1)
     panic("vfs test final cleanup");
   printf("vfs instances: ALL TESTS PASSED\n");
+  test_paths();
 }

@@ -42,7 +42,7 @@ filealloc(void)
     if(f->ref == 0){
       f->ref = 1;
       f->type = FD_NONE;
-      f->vn = 0;
+      f->path = (struct vfs_path){0};
       release(&ftable.lock);
       return f;
     }
@@ -69,7 +69,7 @@ fileclose(struct file *f)
 {
   int type, writable;
   struct pipe *pipe;
-  struct vnode *vn;
+  struct vfs_path path;
 
   acquire(&ftable.lock);
   if(f->ref < 1)
@@ -82,16 +82,16 @@ fileclose(struct file *f)
   type = f->type;
   writable = f->writable;
   pipe = f->pipe;
-  vn = f->vn;
+  path = f->path; // Transfer ownership out of the reusable file slot.
   f->ref = 0;
   f->type = FD_NONE;
-  f->vn = 0;
+  f->path = (struct vfs_path){0};
   release(&ftable.lock);
 
   if(type == FD_PIPE){
     pipeclose(pipe, writable);
   } else if(type == FD_VNODE || type == FD_DEVICE){
-    vfs_put(vn);
+    vfs_path_put(&path);
   }
 }
 
@@ -105,9 +105,9 @@ filestat(struct file *f, uint64 addr)
   
   if(f->type == FD_VNODE || f->type == FD_DEVICE){
     int r;
-    vfs_lock(f->vn);
-    r = vfs_getattr(f->vn, &st);
-    vfs_unlock(f->vn);
+    vfs_lock(f->path.vn);
+    r = vfs_getattr(f->path.vn, &st);
+    vfs_unlock(f->path.vn);
     if(r < 0)
       return -1;
     if(copyout(p->pagetable, addr, (char *)&st, sizeof(st)) < 0)
@@ -135,12 +135,12 @@ fileread(struct file *f, uint64 addr, int n)
     r = devsw[f->major].read(1, addr, n);
   } else if(f->type == FD_VNODE){
     acquiresleep(&f->poslock);
-    vfs_lock(f->vn);
+    vfs_lock(f->path.vn);
     if((uint)n > (uint)-1 - f->off)
       r = -1;
-    else if((r = vfs_read_at(f->vn, 1, addr, f->off, n)) > 0)
+    else if((r = vfs_read_at(f->path.vn, 1, addr, f->off, n)) > 0)
       f->off += r;
-    vfs_unlock(f->vn);
+    vfs_unlock(f->path.vn);
     releasesleep(&f->poslock);
   } else {
     panic("fileread");
@@ -168,7 +168,7 @@ filewrite(struct file *f, uint64 addr, int n)
   } else if(f->type == FD_VNODE){
     // The backend owns the node lock and native log transactions.
     acquiresleep(&f->poslock);
-    r = vfs_write_at(f->vn, 1, addr, f->off, n);
+    r = vfs_write_at(f->path.vn, 1, addr, f->off, n);
     if(r > 0)
       f->off += r;
     releasesleep(&f->poslock);

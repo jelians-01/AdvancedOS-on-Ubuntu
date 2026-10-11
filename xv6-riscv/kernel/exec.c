@@ -35,14 +35,16 @@ kexec(char *path, char **argv)
   uint64 argc, sz = 0, sp, ustack[MAXARG], stackbase;
   struct elfhdr elf;
   struct vnode *vn;
+  struct vfs_path image = {0};
   struct stat st;
   struct proghdr ph;
   pagetable_t pagetable = 0, oldpagetable;
   struct proc *p = myproc();
 
   // Lookup/put may start backend transactions; enter without an outer one.
-  if((vn = vfs_xv6_lookup_path(path)) == 0)
+  if(vfs_xv6_lookup_path(path, &image) < 0)
     return -1;
+  vn = image.vn; // Borrowed from the owned executable path.
   // Keep one stable image across the header and all segment reads.
   vfs_lock(vn);
   if(vfs_getattr(vn, &st) < 0 || st.type != T_FILE || st.size > 0xffffffffU)
@@ -85,7 +87,7 @@ kexec(char *path, char **argv)
       goto bad;
   }
   vfs_unlock(vn);
-  vfs_put(vn);
+  vfs_path_put(&image);
   vn = 0;
 
   p = myproc();
@@ -152,7 +154,7 @@ kexec(char *path, char **argv)
     proc_freepagetable(pagetable, sz);
   if(vn){
     vfs_unlock(vn);
-    vfs_put(vn);
+    vfs_path_put(&image);
   }
   return -1;
 }

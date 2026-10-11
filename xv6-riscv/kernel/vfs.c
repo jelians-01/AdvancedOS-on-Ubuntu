@@ -16,6 +16,11 @@ struct vfs_fs {
   void *data;
 };
 
+struct vfs_mount {
+  int ref;
+  struct vnode *root; // owns a vnode reference, which retains its instance
+};
+
 struct vnode {
   int ref;
   struct vfs_fs *fs;
@@ -26,6 +31,7 @@ static struct {
   struct spinlock lock;
   struct vnode nodes[NINODE];
   struct vfs_fs filesystems[NVFS];
+  struct vfs_mount mounts[NVMOUNT];
 } vtable;
 
 void
@@ -323,30 +329,147 @@ vfs_unlink(struct vnode *dir, const char *name, uint len)
   return dir->fs->node_ops->unlink(dir->data, name, len);
 }
 
-static struct vnode*
-vfs_walk_path(struct vnode *start, const char *path, const char **last, uint *lastlen)
+struct vfs_mount*
+vfs_mount_create(struct vfs_fs *fs)
 {
-  struct vnode *vn, *next;
+  struct vnode *root = vfs_fs_root(fs);
+  struct vfs_mount *mnt;
+
+  if(root == 0)
+    return 0;
+  acquire(&vtable.lock);
+  for(mnt = vtable.mounts; mnt < vtable.mounts + NVMOUNT; mnt++){
+    if(mnt->ref == 0){
+      mnt->root = root;
+      mnt->ref = 1;
+      release(&vtable.lock);
+      return mnt;
+    }
+  }
+  release(&vtable.lock);
+  vfs_put(root);
+  return 0;
+}
+
+struct vfs_mount*
+vfs_mount_dup(struct vfs_mount *mnt)
+{
+  acquire(&vtable.lock);
+  if(mnt == 0 || mnt->ref < 1)
+    panic("vfs_mount_dup");
+  mnt->ref++;
+  release(&vtable.lock);
+  return mnt;
+}
+
+void
+vfs_mount_put(struct vfs_mount *mnt)
+{
+  struct vnode *root;
+
+  acquire(&vtable.lock);
+  if(mnt == 0 || mnt->ref < 1)
+    panic("vfs_mount_put");
+  if(--mnt->ref > 0){
+    release(&vtable.lock);
+    return;
+  }
+  root = mnt->root;
+  mnt->root = 0;
+  release(&vtable.lock);
+  vfs_put(root);
+}
+
+int
+vfs_mount_root(struct vfs_mount *mnt, struct vfs_path *out)
+{
+  *out = (struct vfs_path){0};
+  if(mnt == 0)
+    return -1;
+  out->mnt = vfs_mount_dup(mnt);
+  out->vn = vfs_dup(mnt->root);
+  return 0;
+}
+
+struct vfs_path
+vfs_path_dup(const struct vfs_path *path)
+{
+  struct vfs_path copy;
+
+  if(path->mnt == 0 || path->vn == 0)
+    panic("vfs_path_dup");
+  copy.mnt = vfs_mount_dup(path->mnt);
+  copy.vn = vfs_dup(path->vn);
+  return copy;
+}
+
+void
+vfs_path_put(struct vfs_path *path)
+{
+  struct vfs_path old = *path;
+
+  *path = (struct vfs_path){0};
+  if(old.vn)
+    vfs_put(old.vn);
+  if(old.mnt)
+    vfs_mount_put(old.mnt);
+}
+
+int
+vfs_path_lookup(const struct vfs_path *dir, const char *name, uint len,
+                struct vfs_path *out)
+{
+  *out = (struct vfs_path){0};
+  if(dir->mnt == 0 || dir->vn == 0)
+    return -1;
+  out->vn = vfs_lookup(dir->vn, name, len);
+  if(out->vn == 0)
+    return -1;
+  out->mnt = vfs_mount_dup(dir->mnt);
+  return 0;
+}
+
+int
+vfs_path_create(const struct vfs_path *dir, const char *name, uint len,
+                struct vfs_path *out)
+{
+  *out = (struct vfs_path){0};
+  if(dir->mnt == 0 || dir->vn == 0)
+    return -1;
+  out->vn = vfs_create_file(dir->vn, name, len);
+  if(out->vn == 0)
+    return -1;
+  out->mnt = vfs_mount_dup(dir->mnt);
+  return 0;
+}
+
+static int
+vfs_walk_path(const struct vfs_path *start, const char *path,
+              struct vfs_path *out, const char **last, uint *lastlen)
+{
+  struct vfs_path current, next = {0};
   const char *name;
   uint len;
 
-  if(start == 0 || path == 0)
-    return 0;
+  *out = (struct vfs_path){0};
+  if(start == 0 || start->mnt == 0 || start->vn == 0 || path == 0)
+    return -1;
   for(len = 0; len < MAXPATH && path[len] != 0; len++)
     ;
   if(len == MAXPATH)
-    return 0;
+    return -1;
 
-  vn = vfs_dup(start);
+  current = vfs_path_dup(start);
   for(;;){
     while(*path == '/')
       path++;
     if(*path == 0){
       if(last){
-        vfs_put(vn);
-        return 0;
+        vfs_path_put(&current);
+        return -1;
       }
-      return vn;
+      *out = current; // Transfer both owned references.
+      return 0;
     }
     name = path;
     while(*path != 0 && *path != '/')
@@ -358,37 +481,40 @@ vfs_walk_path(struct vnode *start, const char *path, const char **last, uint *la
       struct stat st;
       int r;
 
-      vfs_lock(vn);
-      r = vfs_getattr(vn, &st);
-      vfs_unlock(vn);
+      vfs_lock(current.vn);
+      r = vfs_getattr(current.vn, &st);
+      vfs_unlock(current.vn);
       if(r < 0 || st.type != T_DIR){
-        vfs_put(vn);
-        return 0;
+        vfs_path_put(&current);
+        return -1;
       }
       *last = name;
       *lastlen = len;
-      return vn;
-    }
-    // Pass the full component; name limits belong to the backend.
-    next = vfs_lookup(vn, name, len);
-    vfs_put(vn);
-    if(next == 0)
+      *out = current;
       return 0;
-    vn = next;
+    }
+    // Every component retains its mount, even when two mounts share a vnode.
+    int r = vfs_path_lookup(&current, name, len, &next);
+    vfs_path_put(&current);
+    if(r < 0)
+      return -1;
+    current = next;
+    next = (struct vfs_path){0};
   }
 }
 
-struct vnode*
-vfs_walk(struct vnode *start, const char *path)
+int
+vfs_path_walk(const struct vfs_path *start, const char *path,
+              struct vfs_path *out)
 {
-  return vfs_walk_path(start, path, 0, 0);
+  return vfs_walk_path(start, path, out, 0, 0);
 }
 
-struct vnode*
-vfs_walk_parent(struct vnode *start, const char *path,
-                const char **name, uint *len)
+int
+vfs_path_parent(const struct vfs_path *start, const char *path,
+                struct vfs_path *out, const char **name, uint *len)
 {
   *name = 0;
   *len = 0;
-  return vfs_walk_path(start, path, name, len);
+  return vfs_walk_path(start, path, out, name, len);
 }

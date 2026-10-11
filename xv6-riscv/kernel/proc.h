@@ -1,3 +1,5 @@
+#include "vfs.h"
+
 // Saved registers for kernel context switches.
 struct context {
   uint64 ra;
@@ -102,6 +104,6 @@ struct proc {
   struct trapframe *trapframe; // data page for trampoline.S
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files
-  struct vnode *cwd;         // Owns one current-directory reference (single root)
+  struct vfs_path cwd;       // Owns the current mount + directory vnode
   char name[16];               // Process name (debugging)
 };
