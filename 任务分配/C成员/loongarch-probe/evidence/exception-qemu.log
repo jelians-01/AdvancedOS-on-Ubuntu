@@ -1,0 +1,3 @@
+exception probe: before syscall
+E
+qemu-system-loongarch64: terminating on signal 15 from pid 700 (/usr/bin/timeout)

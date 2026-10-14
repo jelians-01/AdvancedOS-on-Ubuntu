@@ -9,7 +9,7 @@
 | RISC-V 原生 xv6 | 可编译、启动，完整原版 `usertests` 通过 |
 | 多磁盘与 D1 块设备接口 | 已实现三设备管理、字节读写、容量查询和设备刷新 |
 | VFS 与文件系统后端 | 待集成，本分支尚未包含 ext2/FAT32 后端 |
-| LoongArch 平台适配 | 待实现启动、异常、内存和设备支持 |
+| LoongArch 平台适配 | 已完成交叉编译、QEMU 加载、串口输出、异常现场、`ertn` 返回、定时器和独立上下文切换探查；完整内核适配待实现 |
 
 本阶段重点是多磁盘与块设备层，为文件系统后端提供统一的底层 I/O 接口。设备可读写不等同于文件系统已完成挂载。
 
@@ -22,6 +22,7 @@ xv6-riscv/
   mkfs/             原生文件系统镜像构建工具
   tests/            块设备自动化测试
 任务分配/C成员/       块设备接口说明、阶段验收与测试日志
+任务分配/C成员/loongarch-probe/  LoongArch 最小启动与异常入口探查
 ```
 
 ## 编译与启动
@@ -79,6 +80,10 @@ test-output/host/blkdev_host_test
 
 宿主测试验证块设备层的读改写逻辑；文件系统后端接入后，还需进行内核并发、挂载与文件操作的联调验收。
 
+## LoongArch 探查
+
+LoongArch 阶段先以独立探查目录固定平台事实，不直接改写 RISC-V 公共内核文件。进入 [LoongArch 探查目录](任务分配/C成员/loongarch-probe/)，按其中 README 准备 `loongarch64-unknown-linux-gnu-gcc` 和 QEMU，即可复现串口输出及 `CSR.EENTRY` 异常入口跳转。该探查不表示 xv6 已完成 LoongArch 移植；寄存器保存恢复、定时器触发和独立上下文切换已有探查验证；完整异常与中断处理、页表、用户态、调度器及 VirtIO 的内核接入仍待实现。
+
 ## 协作分工
 
 | 成员 | 负责范围 |
@@ -88,3 +93,4 @@ test-output/host/blkdev_host_test
 | C | HAL、块设备与多磁盘、LoongArch 平台适配 |
 
 公共文件改动通过个人分支和 Pull Request 审阅后合并。构建产物、QEMU 程序和数据镜像不提交到仓库。
+
