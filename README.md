@@ -10,10 +10,10 @@
 | 根目录、目录项和路径查找 | 已完成宿主端验证 |
 | 直接块、单/双/三级间接块读取 | 已完成宿主端验证 |
 | 创建、覆盖和截断实验 | 已完成受限验证 |
-| xv6 内核 ext2 后端 | 等待 A 的 VFS 接口 |
+| xv6 内核 ext2 后端 | 已接入 VFS，使用 RISC-V GCC 成功编译；QEMU 运行验证待升级环境 |
 | FAT32 后端 | 尚未开始 |
 
-宿主端程序不是 xv6 内核文件系统驱动。目前没有自行定义 VFS ABI，也没有把 ext2 接入内核。
+宿主端程序用于格式回归；内核端 `xv6-riscv/kernel/ext2.c` 已按 A 的 VFS ABI 和 C 的 D1 字节设备 ABI 接入。当前后端只读，尚未实现创建、写入、截断、删除和目录修改。
 
 ## C 提供的块设备依赖
 
@@ -35,6 +35,8 @@ xv6-riscv/                         xv6 代码和 C 的块设备实现
 ext2-lab/ext2_reader.c             B 的 ext2 宿主端解析器
 ext2-lab/README.md                 解析器使用说明
 ext2-lab/RESULTS.md                验证结果和当前限制
+xv6-riscv/kernel/ext2.c            xv6 只读 ext2 后端
+xv6-riscv/kernel/ext2.h            ext2 挂载入口
 ```
 
 ## 编译和使用
@@ -76,4 +78,4 @@ e2fsck -fn work.ext2
 
 ## 下一步
 
-取得 A 的 VFS 头文件、挂载流程、节点操作表、锁和错误码约定后，依据 D1 接口实现 `kernel/ext2.c`。VFS 接口确定前不自行定义内核后端 ABI。
+内核后端和 `ext2test` 已通过交叉编译。当前 WSL 的 QEMU 6.2 启动该内核时没有串口输出，项目所需 QEMU 版本为 7.2 以上，因此尚无内核运行验证结果。升级后需按 `ext2-lab/RESULTS.md` 的步骤将含有 `hello.txt` 和 `multi.bin` 的镜像接到设备 2 并运行测试；随后再实现 ext2 写入、截断和块/inode 回收。

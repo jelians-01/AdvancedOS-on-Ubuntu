@@ -27,6 +27,7 @@ OBJS = \
   $K/vfs_test.o \
   $K/vfs_mount_test.o \
   $K/vfs_xv6.o \
+  $K/ext2.o \
   $K/pipe.o \
   $K/exec.o \
   $K/sysfile.o \
@@ -151,6 +152,7 @@ UPROGS=\
 	$U/_vfspath\
 	$U/_vfsexec\
 	$U/_vfsdir\
+	$U/_ext2test\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
