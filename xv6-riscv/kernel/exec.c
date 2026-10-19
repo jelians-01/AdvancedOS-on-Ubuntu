@@ -6,8 +6,11 @@
 #include "proc.h"
 #include "defs.h"
 #include "elf.h"
+#include "stat.h"
+#include "vfs.h"
+#include "vfs_backend.h"
 
-static int loadseg(pde_t *, uint64, struct inode *, uint, uint);
+static int loadseg(pde_t *, uint64, struct vnode *, uint, uint);
 
 // map ELF permissions to PTE permission bits.
 int flags2perm(int flags)
@@ -27,41 +30,50 @@ int
 kexec(char *path, char **argv)
 {
   char *s, *last;
-  int i, off;
+  int i;
+  uint off;
   uint64 argc, sz = 0, sp, ustack[MAXARG], stackbase;
   struct elfhdr elf;
-  struct inode *ip;
+  struct vnode *vn;
+  struct vfs_path image = {0};
+  struct stat st;
   struct proghdr ph;
   pagetable_t pagetable = 0, oldpagetable;
   struct proc *p = myproc();
 
-  begin_op();
-
-  // Open the executable file.
-  if((ip = namei(path)) == 0){
-    end_op();
+  // Lookup/put may start backend transactions; enter without an outer one.
+  if(vfs_xv6_lookup_path(path, &image) < 0)
     return -1;
-  }
-  ilock(ip);
+  vn = image.vn; // Borrowed from the owned executable path.
+  // Keep one stable image across the header and all segment reads.
+  vfs_lock(vn);
+  if(vfs_getattr(vn, &st) < 0 || st.type != T_FILE || st.size > 0xffffffffU)
+    goto bad;
 
   // Read the ELF header.
-  if(readi(ip, 0, (uint64)&elf, 0, sizeof(elf)) != sizeof(elf))
+  if(vfs_read_at(vn, 0, (uint64)&elf, 0, sizeof(elf)) != sizeof(elf))
     goto bad;
 
   // Is this really an ELF file?
   if(elf.magic != ELF_MAGIC)
+    goto bad;
+  // VFS file offsets are uint. Check before narrowing any ELF uint64 field.
+  if(elf.phoff > st.size ||
+     (uint64)elf.phnum * sizeof(ph) > st.size - elf.phoff)
     goto bad;
 
   if((pagetable = proc_pagetable(p)) == 0)
     goto bad;
 
   // Load program into memory.
-  for(i=0, off=elf.phoff; i<elf.phnum; i++, off+=sizeof(ph)){
-    if(readi(ip, 0, (uint64)&ph, off, sizeof(ph)) != sizeof(ph))
+  for(i=0, off=(uint)elf.phoff; i<elf.phnum; i++, off+=sizeof(ph)){
+    if(vfs_read_at(vn, 0, (uint64)&ph, off, sizeof(ph)) != sizeof(ph))
       goto bad;
     if(ph.type != ELF_PROG_LOAD)
       continue;
     if(ph.memsz < ph.filesz)
+      goto bad;
+    if(ph.off > st.size || ph.filesz > st.size - ph.off)
       goto bad;
     if(ph.vaddr + ph.memsz < ph.vaddr)
       goto bad;
@@ -71,12 +83,12 @@ kexec(char *path, char **argv)
     if((sz1 = uvmalloc(pagetable, sz, ph.vaddr + ph.memsz, flags2perm(ph.flags))) == 0)
       goto bad;
     sz = sz1;
-    if(loadseg(pagetable, ph.vaddr, ip, ph.off, ph.filesz) < 0)
+    if(loadseg(pagetable, ph.vaddr, vn, (uint)ph.off, (uint)ph.filesz) < 0)
       goto bad;
   }
-  iunlockput(ip);
-  end_op();
-  ip = 0;
+  vfs_unlock(vn);
+  vfs_path_put(&image);
+  vn = 0;
 
   p = myproc();
   uint64 oldsz = p->sz;
@@ -140,9 +152,9 @@ kexec(char *path, char **argv)
  bad:
   if(pagetable)
     proc_freepagetable(pagetable, sz);
-  if(ip){
-    iunlockput(ip);
-    end_op();
+  if(vn){
+    vfs_unlock(vn);
+    vfs_path_put(&image);
   }
   return -1;
 }
@@ -150,9 +162,10 @@ kexec(char *path, char **argv)
 // Load an ELF program segment into pagetable at virtual address va.
 // va must be page-aligned
 // and the pages from va to va+sz must already be mapped.
+// Caller holds the vnode lock and has checked the segment's file bounds.
 // Returns 0 on success, -1 on failure.
 static int
-loadseg(pagetable_t pagetable, uint64 va, struct inode *ip, uint offset, uint sz)
+loadseg(pagetable_t pagetable, uint64 va, struct vnode *vn, uint offset, uint sz)
 {
   uint i, n;
   uint64 pa;
@@ -165,7 +178,7 @@ loadseg(pagetable_t pagetable, uint64 va, struct inode *ip, uint offset, uint sz
       n = sz - i;
     else
       n = PGSIZE;
-    if(readi(ip, 0, (uint64)pa, offset+i, n) != n)
+    if(vfs_read_at(vn, 0, (uint64)pa, offset+i, n) != n)
       return -1;
   }
   

@@ -5,6 +5,8 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "vfs.h"
+#include "vfs_backend.h"
 
 struct cpu cpus[NCPU];
 
@@ -124,6 +126,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->cwd = (struct vfs_path){0};
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -224,7 +227,7 @@ userinit(void)
   p = allocproc();
   initproc = p;
   
-  p->cwd = namei("/");
+  // cwd is installed in forkret, after fsinit and outside p->lock.
 
   p->state = RUNNABLE;
 
@@ -283,7 +286,8 @@ kfork(void)
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
-  np->cwd = idup(p->cwd);
+  // Both reference increments are non-sleeping, even with np->lock held.
+  np->cwd = vfs_path_dup(&p->cwd);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
@@ -337,10 +341,8 @@ kexit(int status)
     }
   }
 
-  begin_op();
-  iput(p->cwd);
-  end_op();
-  p->cwd = 0;
+  // Release before acquiring wait_lock or p->lock: backend release may sleep.
+  vfs_path_put(&p->cwd);
 
   acquire(&wait_lock);
 
@@ -514,6 +516,11 @@ forkret(void)
     // regular process (e.g., because it calls sleep), and thus cannot
     // be run from main().
     fsinit(ROOTDEV);
+    vfs_selftest();
+    vfs_xv6_init();
+    // Root acquisition may sleep; p->lock was released above.
+    if(vfs_xv6_root(&p->cwd) < 0)
+      panic("init cwd");
 
     first = 0;
     // ensure other cores see first=0.

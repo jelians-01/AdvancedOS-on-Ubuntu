@@ -15,6 +15,8 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "vfs_backend.h"
+#include "vfs.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -80,6 +82,18 @@ sys_read(void)
 }
 
 uint64
+sys_readdir(void)
+{
+  struct file *f;
+  uint64 addr;
+
+  argaddr(1, &addr);
+  if(argfd(0, 0, &f) < 0)
+    return -1;
+  return filereaddir(f, addr);
+}
+
+uint64
 sys_write(void)
 {
   struct file *f;
@@ -119,253 +133,84 @@ sys_fstat(void)
   return filestat(f, st);
 }
 
-// Create the path new as a link to the same inode as old.
+// Create the path new as a link to the same node as old.
 uint64
 sys_link(void)
 {
-  char name[DIRSIZ], new[MAXPATH], old[MAXPATH];
-  struct inode *dp, *ip;
+  char new[MAXPATH], old[MAXPATH];
 
   if(argstr(0, old, MAXPATH) < 0 || argstr(1, new, MAXPATH) < 0)
     return -1;
-
-  begin_op();
-  if((ip = namei(old)) == 0){
-    end_op();
-    return -1;
-  }
-
-  ilock(ip);
-  if(ip->type == T_DIR){
-    iunlockput(ip);
-    end_op();
-    return -1;
-  }
-
-  ip->nlink++;
-  iupdate(ip);
-  iunlock(ip);
-
-  if((dp = nameiparent(new, name)) == 0)
-    goto bad;
-  ilock(dp);
-  if(dp->dev != ip->dev || dirlink(dp, name, ip->inum) < 0){
-    iunlockput(dp);
-    goto bad;
-  }
-  iunlockput(dp);
-  iput(ip);
-
-  end_op();
-
-  return 0;
-
-bad:
-  ilock(ip);
-  ip->nlink--;
-  iupdate(ip);
-  iunlockput(ip);
-  end_op();
-  return -1;
-}
-
-// Is the directory dp empty except for "." and ".." ?
-static int
-isdirempty(struct inode *dp)
-{
-  int off;
-  struct dirent de;
-
-  for(off=2*sizeof(de); off<dp->size; off+=sizeof(de)){
-    if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
-      panic("isdirempty: readi");
-    if(de.inum != 0)
-      return 0;
-  }
-  return 1;
+  return vfs_xv6_link(old, new);
 }
 
 uint64
 sys_unlink(void)
 {
-  struct inode *ip, *dp;
-  struct dirent de;
-  char name[DIRSIZ], path[MAXPATH];
-  uint off;
+  char path[MAXPATH];
 
   if(argstr(0, path, MAXPATH) < 0)
     return -1;
-
-  begin_op();
-  if((dp = nameiparent(path, name)) == 0){
-    end_op();
-    return -1;
-  }
-
-  ilock(dp);
-
-  // Cannot unlink "." or "..".
-  if(namecmp(name, ".") == 0 || namecmp(name, "..") == 0)
-    goto bad;
-
-  if((ip = dirlookup(dp, name, &off)) == 0)
-    goto bad;
-  ilock(ip);
-
-  if(ip->nlink < 1)
-    panic("unlink: nlink < 1");
-  if(ip->type == T_DIR && !isdirempty(ip)){
-    iunlockput(ip);
-    goto bad;
-  }
-
-  memset(&de, 0, sizeof(de));
-  if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
-    panic("unlink: writei");
-  if(ip->type == T_DIR){
-    dp->nlink--;
-    iupdate(dp);
-  }
-  iunlockput(dp);
-
-  ip->nlink--;
-  iupdate(ip);
-  iunlockput(ip);
-
-  end_op();
-
-  return 0;
-
-bad:
-  iunlockput(dp);
-  end_op();
-  return -1;
-}
-
-static struct inode*
-create(char *path, short type, short major, short minor)
-{
-  struct inode *ip, *dp;
-  char name[DIRSIZ];
-
-  if((dp = nameiparent(path, name)) == 0)
-    return 0;
-
-  ilock(dp);
-
-  if((ip = dirlookup(dp, name, 0)) != 0){
-    iunlockput(dp);
-    ilock(ip);
-    if(type == T_FILE && (ip->type == T_FILE || ip->type == T_DEVICE))
-      return ip;
-    iunlockput(ip);
-    return 0;
-  }
-
-  if((ip = ialloc(dp->dev, type)) == 0){
-    iunlockput(dp);
-    return 0;
-  }
-
-  ilock(ip);
-  ip->major = major;
-  ip->minor = minor;
-  ip->nlink = 1;
-  iupdate(ip);
-
-  if(type == T_DIR){  // Create . and .. entries.
-    // No ip->nlink++ for ".": avoid cyclic ref count.
-    if(dirlink(ip, ".", ip->inum) < 0 || dirlink(ip, "..", dp->inum) < 0)
-      goto fail;
-  }
-
-  if(dirlink(dp, name, ip->inum) < 0)
-    goto fail;
-
-  if(type == T_DIR){
-    // now that success is guaranteed:
-    dp->nlink++;  // for ".."
-    iupdate(dp);
-  }
-
-  iunlockput(dp);
-
-  return ip;
-
- fail:
-  // something went wrong. de-allocate ip.
-  ip->nlink = 0;
-  iupdate(ip);
-  iunlockput(ip);
-  iunlockput(dp);
-  return 0;
+  return vfs_xv6_unlink(path);
 }
 
 uint64
 sys_open(void)
 {
   char path[MAXPATH];
-  int fd, omode;
+  int fd, omode, r, major = -1;
   struct file *f;
-  struct inode *ip;
-  int n;
+  struct vnode *vn;
+  struct vfs_path opened = {0};
+  struct stat st;
 
   argint(1, &omode);
-  if((n = argstr(0, path, MAXPATH)) < 0)
+  if(argstr(0, path, MAXPATH) < 0)
     return -1;
 
-  begin_op();
+  // Own the mount and vnode until both are handed to the open file.
+  if(omode & O_CREATE)
+    r = vfs_xv6_create_file(path, &opened);
+  else
+    r = vfs_xv6_lookup_path(path, &opened);
+  if(r < 0)
+    return -1;
+  vn = opened.vn; // Borrowed while opened (then f->path) owns it.
 
-  if(omode & O_CREATE){
-    ip = create(path, T_FILE, 0, 0);
-    if(ip == 0){
-      end_op();
-      return -1;
-    }
-  } else {
-    if((ip = namei(path)) == 0){
-      end_op();
-      return -1;
-    }
-    ilock(ip);
-    if(ip->type == T_DIR && omode != O_RDONLY){
-      iunlockput(ip);
-      end_op();
-      return -1;
-    }
-  }
-
-  if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
-    iunlockput(ip);
-    end_op();
+  vfs_lock(vn);
+  r = vfs_getattr(vn, &st);
+  if(r == 0 && st.type == T_DEVICE)
+    major = vfs_device_major(vn);
+  vfs_unlock(vn);
+  if(r < 0 ||
+     (st.type != T_FILE && st.type != T_DIR && st.type != T_DEVICE) ||
+     (st.type == T_DIR && omode != O_RDONLY) ||
+     (st.type == T_DEVICE && (major < 0 || major >= NDEV))){
+    vfs_path_put(&opened);
     return -1;
   }
 
+  // Allocate before truncating: descriptor exhaustion must preserve contents.
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
     if(f)
       fileclose(f);
-    iunlockput(ip);
-    end_op();
+    vfs_path_put(&opened);
     return -1;
   }
 
-  if(ip->type == T_DEVICE){
-    f->type = FD_DEVICE;
-    f->major = ip->major;
-  } else {
-    f->type = FD_INODE;
-    f->off = 0;
-  }
-  f->ip = ip;
+  f->type = st.type == T_DEVICE ? FD_DEVICE : FD_VNODE;
+  f->path = opened; // Transfer both references; no extra dup.
+  f->major = major;
+  f->off = 0;
   f->readable = !(omode & O_WRONLY);
   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
 
-  if((omode & O_TRUNC) && ip->type == T_FILE){
-    itrunc(ip);
+  if((omode & O_TRUNC) && st.type == T_FILE &&
+     vfs_truncate_zero(vn) < 0){
+    myproc()->ofile[fd] = 0;
+    fileclose(f);
+    return -1;
   }
-
-  iunlock(ip);
-  end_op();
 
   return fd;
 }
@@ -374,60 +219,49 @@ uint64
 sys_mkdir(void)
 {
   char path[MAXPATH];
-  struct inode *ip;
 
-  begin_op();
-  if(argstr(0, path, MAXPATH) < 0 || (ip = create(path, T_DIR, 0, 0)) == 0){
-    end_op();
+  if(argstr(0, path, MAXPATH) < 0)
     return -1;
-  }
-  iunlockput(ip);
-  end_op();
-  return 0;
+  return vfs_xv6_mkdir(path);
 }
 
 uint64
 sys_mknod(void)
 {
-  struct inode *ip;
   char path[MAXPATH];
   int major, minor;
 
-  begin_op();
   argint(1, &major);
   argint(2, &minor);
-  if((argstr(0, path, MAXPATH)) < 0 ||
-     (ip = create(path, T_DEVICE, major, minor)) == 0){
-    end_op();
+  if(argstr(0, path, MAXPATH) < 0)
     return -1;
-  }
-  iunlockput(ip);
-  end_op();
-  return 0;
+  return vfs_xv6_mknod(path, major, minor);
 }
 
 uint64
 sys_chdir(void)
 {
   char path[MAXPATH];
-  struct inode *ip;
+  struct vfs_path next = {0}, old;
+  struct stat st;
   struct proc *p = myproc();
-  
-  begin_op();
-  if(argstr(0, path, MAXPATH) < 0 || (ip = namei(path)) == 0){
-    end_op();
+  int r;
+
+  if(argstr(0, path, MAXPATH) < 0)
+    return -1;
+  if(vfs_xv6_lookup_path(path, &next) < 0)
+    return -1;
+  vfs_lock(next.vn);
+  r = vfs_getattr(next.vn, &st);
+  vfs_unlock(next.vn);
+  if(r < 0 || st.type != T_DIR){
+    vfs_path_put(&next);
     return -1;
   }
-  ilock(ip);
-  if(ip->type != T_DIR){
-    iunlockput(ip);
-    end_op();
-    return -1;
-  }
-  iunlock(ip);
-  iput(p->cwd);
-  end_op();
-  p->cwd = ip;
+  // Transfer both references; xv6 has no threads sharing this proc.
+  old = p->cwd;
+  p->cwd = next;
+  vfs_path_put(&old);
   return 0;
 }
 

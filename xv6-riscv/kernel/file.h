@@ -1,11 +1,15 @@
+#include "vfs.h"
+
 struct file {
-  enum { FD_NONE, FD_PIPE, FD_INODE, FD_DEVICE } type;
+  enum { FD_NONE, FD_PIPE, FD_VNODE, FD_DEVICE } type;
   int ref; // reference count
   char readable;
   char writable;
   struct pipe *pipe; // FD_PIPE
-  struct inode *ip;  // FD_INODE and FD_DEVICE
-  uint off;          // FD_INODE
+  struct vfs_path path; // FD_VNODE and FD_DEVICE; owns mount + vnode
+  uint off;          // FD_VNODE
+  uint64 dircursor;  // opaque readdir cookie, independent of raw read offset
+  struct sleeplock poslock; // protects offsets, readdir cookie and I/O
   short major;       // FD_DEVICE
 };
 

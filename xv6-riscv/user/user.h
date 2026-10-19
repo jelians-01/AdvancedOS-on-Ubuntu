@@ -1,6 +1,7 @@
 #define SBRK_ERROR ((char *)-1)
 
 struct stat;
+struct vfs_dirent;
 
 // system calls
 int fork(void);
@@ -9,6 +10,8 @@ int wait(int*);
 int pipe(int*);
 int write(int, const void*, int);
 int read(int, void*, int);
+// 1=entry, 0=EOF, -1=error. dup/fork share the opaque directory cursor.
+int readdir(int, struct vfs_dirent*);
 int close(int);
 int kill(int);
 int exec(const char*, char**);

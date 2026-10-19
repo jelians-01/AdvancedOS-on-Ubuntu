@@ -23,6 +23,10 @@ OBJS = \
   $K/log.o \
   $K/sleeplock.o \
   $K/file.o \
+  $K/vfs.o \
+  $K/vfs_test.o \
+  $K/vfs_mount_test.o \
+  $K/vfs_xv6.o \
   $K/pipe.o \
   $K/exec.o \
   $K/sysfile.o \
@@ -144,6 +148,9 @@ UPROGS=\
 	$U/_sh\
 	$U/_stressfs\
 	$U/_usertests\
+	$U/_vfspath\
+	$U/_vfsexec\
+	$U/_vfsdir\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
