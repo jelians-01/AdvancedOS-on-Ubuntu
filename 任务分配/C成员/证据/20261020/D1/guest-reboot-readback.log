@@ -1,0 +1,16 @@
+
+xv6 kernel is booting
+
+blkdev: dev=1 mmio=0x0000000010001000 sectors=4000 ro=0 flush=1
+blkdev: dev=2 mmio=0x0000000010002000 sectors=8192 ro=0 flush=1
+blkdev: dev=3 mmio=0x0000000010003000 sectors=8192 ro=0 flush=1
+hart 1 starting
+hart 2 starting
+D1 PASS: capacity and three devices
+D1 PASS: guest read after flush and reboot
+D1 PASS: guest read after flush and reboot
+D1 PASS: capacity-end bytes persist
+D1 ALL TESTS PASSED
+init: starting sh
+$ QEMU: Terminated
+

@@ -23,7 +23,11 @@ env = dict(os.environ)
 env['PATH'] = str(Path(qemu).parent) + ':' + env.get('PATH', '')
 manifest = {'qemu': subprocess.check_output([qemu, '--version'], text=True).splitlines()[0],
             'compiler': subprocess.check_output(['riscv64-linux-gnu-gcc', '--version'], text=True).splitlines()[0],
-            'cpu_count': 3, 'machine': 'virt', 'cache': 'writeback', 'results': []}
+            'cpu_count': 3, 'machine': 'virt', 'cache': 'writeback', 'results': [],
+            'source_sha256': {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest()
+                for folder in ('kernel', 'user', 'tests') for p in (source/folder).rglob('*')
+                if p.is_file() and p.suffix in ('.c','.h','.S','.py')},
+            'makefile_sha256': hashlib.sha256((source/'Makefile').read_bytes()).hexdigest()}
 
 def copy_build(name, selftest=False, readonly=False, persistence=False):
     work = out / name
@@ -76,6 +80,8 @@ def run(work, name, commands=(), readonly=False, selftest=False, expected_disks=
         nonlocal cursor
         deadline = time.monotonic()+timeout
         while time.monotonic() < deadline:
+            if b'panic:' in transcript[cursor:]:
+                raise RuntimeError('kernel panic; see QEMU log')
             position = transcript.find(token, cursor)
             if position >= 0:
                 part = bytes(transcript[cursor:position+len(token)])
@@ -152,4 +158,14 @@ run(normal, 'single-root-compatibility', ['usertests copyin'], expected_disks=1)
 ro = copy_build('readonly', selftest=True, readonly=True)
 run(ro, 'read-only-device', selftest=True, readonly=True)
 (out / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
-print('C TEST MATRIX PASSED', flush=True)
+# Exercise the actual D1 implementation through the host transport adapter.
+binary = out/'blkdev_host_test'
+with (out/'host-sanitizer.log').open('wb') as log:
+    subprocess.run(['gcc','-DBLKDEV_HOST_TEST','-g','-O1','-pthread',
+                    '-fsanitize=address,undefined','kernel/blkdev.c',
+                    'tests/blkdev_host_test.c','-o',str(binary)],
+                   cwd=source,env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
+    subprocess.run([str(binary)],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
+manifest['results'].append({'case':'host concurrency and ASan/UBSan','status':'PASS'})
+(out/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2))
+print('D1 AND NATIVE TEST MATRIX PASSED', flush=True)

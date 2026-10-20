@@ -41,6 +41,17 @@ blkdev_selftest(void)
         check(0, "same offset isolation");
   }
   check(1, "same offset isolation");
+  uchar stackbuf[1031];
+  check(blk_read(2, 0, stackbuf, sizeof(stackbuf)) == 0,
+        "kernel stack buffer aligned-sector read");
+  for(uint i = 0; i < sizeof(stackbuf); i++)
+    if(stackbuf[i] != (uchar)(i*17+2))
+      check(0, "kernel stack buffer bytes");
+  check(1, "kernel stack buffer bytes");
+  check(blk_write(2, 2048, stackbuf, sizeof(stackbuf)) == 0 &&
+        blk_read(2, 2048, after, sizeof(stackbuf)) == 0 &&
+        memcmp(stackbuf, after, sizeof(stackbuf)) == 0,
+        "kernel stack buffer aligned-sector write");
   check(blk_read(2, 511, after, 1027) == 0, "unaligned cross-sector read");
   for(uint i = 0; i < 1027; i++)
     if(after[i] != (uchar)((i+511)*17+2))

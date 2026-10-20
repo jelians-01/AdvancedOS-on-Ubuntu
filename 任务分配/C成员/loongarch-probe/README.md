@@ -119,3 +119,16 @@ context: complete
 
 日志在 `evidence/context-build.log` 和 `evidence/context-qemu.log`。这是调度上下文的独立验证，不等于已经接入 xv6 的 `proc`、调度器或页表。
 
+
+
+## 五类探查统一复现
+
+在 Ubuntu/WSL 运行，工具不在 PATH 时设置实际安装位置：
+
+```bash
+export LOONGARCH_CROSS=/your/toolchain/bin/loongarch64-unknown-linux-gnu-
+export LOONGARCH_QEMU=/your/qemu/bin/qemu-system-loongarch64
+python3 run_probes.py
+```
+
+脚本在 test-output 中新建构建副本，分别验证启动/串口、异常入口、定时器、现场恢复与 ertn、独立上下文切换。程序验证后进入空闲循环，脚本按超时终止，并检查串口标记。原始输出和 manifest.json 保留在该次目录。

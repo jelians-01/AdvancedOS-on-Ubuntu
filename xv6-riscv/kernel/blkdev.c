@@ -52,10 +52,16 @@ range_io(uint dev, uint64 off, void *data, uint n, int write)
       take = n;
     uint64 sector = off / VDISK_SECTOR_SIZE;
     if(skip == 0 && take == VDISK_SECTOR_SIZE){
-      if(virtio_disk_transfer(dev, sector, p, take, write) < 0){
+      // Caller buffers may live on high, non-identity-mapped kernel stacks.
+      // DMA only through the identity-mapped per-device static sector buffer.
+      if(write)
+        memmove(bounce, p, take);
+      if(virtio_disk_transfer(dev, sector, bounce, take, write) < 0){
         result = -1;
         break;
       }
+      if(!write)
+        memmove(p, bounce, take);
     } else {
       if(virtio_disk_transfer(dev, sector, bounce, VDISK_SECTOR_SIZE, 0) < 0){
         result = -1;
