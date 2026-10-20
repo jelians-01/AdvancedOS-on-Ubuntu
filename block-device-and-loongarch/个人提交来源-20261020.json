@@ -128,5 +128,10 @@
     "任务分配/C成员/证据/same-images-reboot.log": "21f83b55b6ff7756240ae8e336d399b1e71cf43aa4d9a015794284af75a3341f",
     "任务分配/C成员/证据/single-root-compatibility.log": "ff1f38fc615c4258a68e6c6fd0666f33d743cd6133f5b456c4a3d98e42744564",
     "任务分配/C成员/证据/three-device-d1.log": "999c49a68cee1d7697519be5a45e8fe2842259f49cdb98179b4c17ea395f8f55"
-  }
+  },
+  "path_mapping": {
+    "original_snapshot_prefix": "任务分配/C成员/",
+    "current_prefix": "block-device-and-loongarch/"
+  },
+  "path_mapping_note": "sha256 中的路径和校验值记录原始来源快照，保留用于追溯；现行目录按 path_mapping 映射。历史日志和测试 manifest 不改写。"
 }

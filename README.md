@@ -11,7 +11,7 @@
 - 自动回归记录源码及 Makefile 校验值，遇到内核 panic 及时失败；集成宿主 20000 次并发写入和 ASan/UBSan 检查。
 - 为现有五类 LoongArch 独立探查新增统一构建、运行和日志收集脚本；没有新增完整内核移植能力。
 
-本轮独立验证记录见 [本次提交说明](任务分配/C成员/本次提交说明-20261020.md)。独立模块通过不代表其他分支集成后的全部功能通过。
+本轮独立验证记录见 [本次提交说明](block-device-and-loongarch/本次提交说明-20261020.md)。独立模块通过不代表其他分支集成后的全部功能通过。
 
 ## 当前进展
 
@@ -26,14 +26,17 @@
 
 ## 目录结构
 
+`block-device-and-loongarch/` 保存 D1 块设备说明、交付与测试证据，以及 LoongArch 探查源码和阶段计划。实际 RISC-V 块设备实现仍位于 `xv6-riscv/kernel/`。
+
+
 ```text
 xv6-riscv/
   kernel/           内核、块设备接口及 VirtIO 驱动
   user/             用户程序与原版回归测试
   mkfs/             原生文件系统镜像构建工具
   tests/            块设备自动化测试
-任务分配/C成员/       块设备接口说明、阶段验收与测试日志
-任务分配/C成员/loongarch-probe/  LoongArch 最小启动与异常入口探查
+block-device-and-loongarch/       块设备接口说明、阶段验收与测试日志
+block-device-and-loongarch/loongarch-probe/  LoongArch 最小启动与异常入口探查
 ```
 
 ## 编译与启动
@@ -62,7 +65,7 @@ dev=1 是原生根盘，dev=2/3 是数据盘。D1 不负责格式化、挂载或
 
 接口声明位于 `xv6-riscv/kernel/blkdev.h`，实现位于 `blkdev.c`，底层驱动位于 `virtio_disk.c`。D1 提供 `blk_read`、`blk_write`、`blk_size` 和 `blk_flush`；偏移及长度以字节计，调用同步完成，成功返回 0，失败返回 -1。
 
-详细约束、设备映射、公共文件改动和证据见 [D1 交付说明](任务分配/C成员/D1交付说明.md)。
+详细约束、设备映射、公共文件改动和证据见 [D1 交付说明](block-device-and-loongarch/D1交付说明.md)。
 
 ## 测试
 
@@ -87,13 +90,13 @@ gcc -DBLKDEV_HOST_TEST -g -O1 -pthread -fsanitize=address,undefined \
 test-output/host/blkdev_host_test
 ```
 
-2026-10-06 阶段验证通过：三设备隔离、非对齐读写、刷新后重启读回、只读盘处理、单根盘兼容、完整原版 `usertests`（含慢速组），以及 20000 次宿主并发部分扇区写入。运行配置和日志见 [阶段验收记录](任务分配/C成员/本次接入验收.md)。
+2026-10-06 阶段验证通过：三设备隔离、非对齐读写、刷新后重启读回、只读盘处理、单根盘兼容、完整原版 `usertests`（含慢速组），以及 20000 次宿主并发部分扇区写入。运行配置和日志见 [阶段验收记录](block-device-and-loongarch/本次接入验收.md)。
 
 宿主测试验证块设备层的读改写逻辑；文件系统后端接入后，还需进行内核并发、挂载与文件操作的联调验收。
 
 ## LoongArch 探查
 
-LoongArch 阶段先以独立探查目录固定平台事实，不直接改写 RISC-V 公共内核文件。进入 [LoongArch 探查目录](任务分配/C成员/loongarch-probe/)，按其中 README 准备 `loongarch64-unknown-linux-gnu-gcc` 和 QEMU，即可复现串口输出及 `CSR.EENTRY` 异常入口跳转。该探查不表示 xv6 已完成 LoongArch 移植；寄存器保存恢复、定时器触发和独立上下文切换已有探查验证；完整异常与中断处理、页表、用户态、调度器及 VirtIO 的内核接入仍待实现。
+LoongArch 阶段先以独立探查目录固定平台事实，不直接改写 RISC-V 公共内核文件。进入 [LoongArch 探查目录](block-device-and-loongarch/loongarch-probe/)，按其中 README 准备 `loongarch64-unknown-linux-gnu-gcc` 和 QEMU，即可复现串口输出及 `CSR.EENTRY` 异常入口跳转。该探查不表示 xv6 已完成 LoongArch 移植；寄存器保存恢复、定时器触发和独立上下文切换已有探查验证；完整异常与中断处理、页表、用户态、调度器及 VirtIO 的内核接入仍待实现。
 
 ## 协作分工
 

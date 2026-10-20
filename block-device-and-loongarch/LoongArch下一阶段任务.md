@@ -8,7 +8,7 @@
 - QEMU 提供 `virt` 机器，型号为 Loongson-3A5000/LS7A1000。
 - 工具链已固定为 `loongarch64-unknown-linux-gnu-gcc` 13.0.0（20220906 experimental），放在项目外的 `tools/loongarch-cross/`。
 - QEMU 7.2.22 的 `virt` 机器已经成功加载最小 ELF，并输出 `loongarch probe: hello`。
-- `syscall 0` 已经能够跳转到 CSR.EENTRY 指定的向量并输出 `E`；可复核源码和日志位于 `C成员开发/loongarch-probe/`。
+- `syscall 0` 已经能够跳转到 CSR.EENTRY 指定的向量并输出 `E`；可复核源码和日志位于 `block-device-and-loongarch/loongarch-probe/`。
 - 定时器 CSR、定时器中断使能和向量触发已验证；软件异常的 32 个通用寄存器保存、`CSR.ERA` 推进、恢复和 `ertn` 返回也已在独立探查中验证。工具链本身不提交 GitHub。
 - 两个独立栈之间的 `ra/sp/fp/s0-s8` 上下文切换也已在 QEMU 中验证；尚未接入 xv6 的 `proc` 和调度器。
 

@@ -30,7 +30,7 @@
 
 ```sh
 export PATH=/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin:$PATH
-cd 任务分配/C成员/loongarch-probe
+cd block-device-and-loongarch/loongarch-probe
 make
 make exception
 make timer
