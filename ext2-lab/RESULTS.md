@@ -18,16 +18,17 @@ The `hal-platform` base provides C's D1 byte-range device API (`blk_read`, `blk_
 
 ## Kernel build and runtime status
 
-- On 2026-10-19, `make -j4 TOOLPREFIX=riscv64-unknown-elf- kernel/kernel fs.img` completed successfully in WSL Ubuntu with RISC-V GCC 10.2.0. This also built the `ext2test` user program into the xv6 image.
-- QEMU available in that WSL distribution is 6.2.0; the project requires 7.2 or newer. Manual boot attempts with QEMU 6.2 produced no xv6 serial output, with and without a second data disk. Runtime validation of the kernel backend is therefore pending and is not claimed as passed.
-- A disposable 32 MiB ext2 image with `hello.txt` and a 3073-byte `multi.bin` was created at `/tmp/ext2-kernel-check-20261019/ext2.img`. The host parser read its root directory and data crossing a block boundary; `e2fsck -fn` passed. Its copy at `/home/chenliu/AdvancedOS/ext2-vfs-build/ext2-dev2-check.img` is for local QEMU testing and is not part of the repository.
+- On 2026-10-20, `make -j4 TOOLPREFIX=riscv64-unknown-elf- kernel/kernel fs.img` completed successfully in WSL Ubuntu with RISC-V GCC 10.2.0. This also builds the `ext2test` user program into the xv6 image.
+- QEMU 8.2.2 successfully booted xv6 with a second virtio disk assigned to device 2. `ext2test` printed `ext2test: ALL TESTS PASSED`; it checked mounted-root enumeration, file attributes, the complete `hello.txt` contents, EOF behavior, and every byte of a 3073-byte `multi.bin` across four data blocks. `ls /mnt` listed both files and `cat /mnt/hello.txt` printed `hello from ext2`.
+- The runtime test exposed and fixed two issues: the superblock buffer passed to virtio must be page-allocated (DMA cannot use that stack buffer), and directory record bounds must be measured from the start of the current block when the readdir cookie is nonzero.
+- The disposable 32 MiB ext2 image with `hello.txt` and `multi.bin` is at `/home/ext2-test/ext2.img` inside Ubuntu 24.04. `e2fsck -fn` passed before boot. The image is a local test artifact and is not part of the repository.
 
-After installing QEMU 7.2 or newer in WSL, run from `xv6-riscv`:
+To repeat the test in WSL Ubuntu 24.04, run from `xv6-riscv`:
 
 ```bash
 make qemu TOOLPREFIX=riscv64-unknown-elf- \
   QEMU=qemu-system-riscv64 \
-  DISK2=/home/chenliu/AdvancedOS/ext2-vfs-build/ext2-dev2-check.img
+  DISK2=/home/ext2-test/ext2.img
 ```
 
-At the xv6 shell, run `ext2test`, then independently check `ls /mnt` and `cat /mnt/hello.txt`. A passing test prints `ext2test: ALL TESTS PASSED`. The earlier disposable `ext2-dev2.img` contains only `hello.txt`, so it does not satisfy `ext2test`'s directory and 3073-byte multi-block file checks.
+At the xv6 shell, run `ext2test`, then independently check `ls /mnt` and `cat /mnt/hello.txt`. A passing test prints `ext2test: ALL TESTS PASSED`.

@@ -102,7 +102,7 @@ ext2_read_block(struct ext2_fs *fs, uint block, void *dst)
 static int
 ext2_load_super(struct ext2_fs *fs)
 {
-  uchar sb[EXT2_SUPER_SIZE];
+  uchar *sb;
   uint log_block_size;
   uint compat_supported = EXT2_FEATURE_COMPAT_EXT_ATTR;
   uint incompat_supported = EXT2_FEATURE_INCOMPAT_FILETYPE;
@@ -110,9 +110,18 @@ ext2_load_super(struct ext2_fs *fs)
                       EXT2_FEATURE_RO_COMPAT_LARGE_FILE;
   uint64 device_bytes;
 
-  if(blk_read(fs->dev, EXT2_SUPER_OFFSET, sb, sizeof(sb)) < 0 ||
-     get16(sb + 56) != EXT2_MAGIC)
+  sb = kalloc();
+  if(sb == 0)
     return -1;
+
+  if(blk_read(fs->dev, EXT2_SUPER_OFFSET, sb, EXT2_SUPER_SIZE) < 0){
+    kfree(sb);
+    return -1;
+  }
+  if(get16(sb + 56) != EXT2_MAGIC){
+    kfree(sb);
+    return -1;
+  }
   fs->inodes_count = get32(sb + 0);
   fs->blocks_count = get32(sb + 4);
   fs->first_data_block = get32(sb + 20);
@@ -128,7 +137,7 @@ ext2_load_super(struct ext2_fs *fs)
   if(log_block_size > 2 || fs->inodes_count == 0 || fs->blocks_count == 0 ||
      fs->blocks_per_group == 0 || fs->inodes_per_group == 0 ||
      fs->inode_size < 128 || fs->inode_size > (1024u << log_block_size))
-    return -1;
+    goto bad;
   fs->block_size = 1024u << log_block_size;
   fs->group_count = (fs->inodes_count + fs->inodes_per_group - 1) /
                     fs->inodes_per_group;
@@ -141,8 +150,13 @@ ext2_load_super(struct ext2_fs *fs)
      (uint64)fs->blocks_count * fs->block_size > 0xffffffffUL ||
      blk_size(fs->dev, &device_bytes) < 0 ||
      (uint64)fs->blocks_count * fs->block_size > device_bytes)
-    return -1;
+    goto bad;
+  kfree(sb);
   return 0;
+
+bad:
+  kfree(sb);
+  return -1;
 }
 
 static struct ext2_inode *
@@ -497,8 +511,8 @@ ext2_readdir(void *data, uint64 *cursor, struct vfs_dirent *out)
        ext2_read_block(fs, physical, buf) < 0)
       goto done_free;
     valid = fs->block_size;
-    if(ext2_inode_size(dir) - off < valid)
-      valid = ext2_inode_size(dir) - off;
+    if(ext2_inode_size(dir) - logical * fs->block_size < valid)
+      valid = ext2_inode_size(dir) - logical * fs->block_size;
     if(within >= valid)
       goto done_free;
     pos = within;
