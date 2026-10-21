@@ -1,0 +1,3 @@
+disk: begin (PCI VirtIO, synchronous D1)
+disk: dev=0x0000000000000001 modern=0x0000000000000001 ro=0x0000000000000000 bytes=0x0000000000800000
+disk: single-root compatibility PASS

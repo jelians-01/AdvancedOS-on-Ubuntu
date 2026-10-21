@@ -1,6 +1,12 @@
 #include "vm-table.h"
 
-#define FLAGS (VM_VALID | VM_WRITE | VM_NR | VM_NX)
+#define FLAGS (VM_VALID | VM_WRITE | VM_USER | VM_NR | VM_NX)
+
+static int flags_valid(uint64_t flags)
+{
+  return !(flags & ~FLAGS) &&
+         (!(flags & VM_USER) || (flags & VM_USER) == VM_USER);
+}
 
 uintptr_t
 vm_physical(const void *pointer)
@@ -50,7 +56,7 @@ int
 vm_map(struct probe_vm *vm, uintptr_t va, uintptr_t pa, uint64_t flags)
 {
   if (!vm || !vm->root || va >= VM_LIMIT || va % VM_PAGE_SIZE ||
-      pa % VM_PAGE_SIZE || (pa & ~VM_PHYS_MASK) || (flags & ~FLAGS))
+      pa % VM_PAGE_SIZE || (pa & ~VM_PHYS_MASK) || !flags_valid(flags))
     return -1;
   uint64_t *table = vm->root;
   uint64_t *created_slots[2];
@@ -91,7 +97,7 @@ vm_lookup(const struct probe_vm *vm, uintptr_t va)
 int
 vm_protect(struct probe_vm *vm, uintptr_t va, uint64_t flags)
 {
-  if (va % VM_PAGE_SIZE || (flags & ~FLAGS))
+  if (va % VM_PAGE_SIZE || !flags_valid(flags))
     return -1;
   uint64_t *slot = leaf(vm, va);
   if (!slot || !*slot)

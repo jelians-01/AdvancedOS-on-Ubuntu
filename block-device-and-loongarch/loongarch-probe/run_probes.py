@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import time
+from disk_matrix import run_disk_matrix
 
 source = Path(__file__).resolve().parent
 out = source/'test-output'/time.strftime('run-%Y%m%d-%H%M%S')
@@ -28,8 +29,8 @@ manifest['qemu'] = subprocess.check_output([qemu,'--version'],text=True).splitli
 qemu_executable = Path(shutil.which(qemu) or qemu).resolve()
 manifest['qemu_sha256'] = hashlib.sha256(qemu_executable.read_bytes()).hexdigest()
 manifest['runner_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-manifest['support_sha256'] = {'apply_qemu_pnx_fix.py': hashlib.sha256(
-    (source/'apply_qemu_pnx_fix.py').read_bytes()).hexdigest()}
+manifest['support_sha256'] = {name:hashlib.sha256((source/name).read_bytes()).hexdigest()
+                              for name in ('apply_qemu_pnx_fix.py','disk_matrix.py')}
 cases = [
     ('all','loongarch-probe.elf',['loongarch probe: hello']),
     ('exception','exception-probe.elf',['exception probe: before syscall','E']),
@@ -57,9 +58,41 @@ cases = [
         'vm: unmapped refill miss recovery PASS',
         'vm: remap to different physical page PASS',
         'vm: table and data page reclamation PASS',
-        'vm: ALL PASS'])]
+        'vm: ALL PASS']),
+    ('user','user-probe.elf',[
+        'user: PLV3 syscalls cross-page copies and register stacks PASS',
+        'user: two address spaces and timer preemption PASS',
+        'user: kernel window privileged page RO NX guard isolation PASS',
+        'user: all process memory reclaimed PASS','user: ALL PASS'])]
+
+def run_guest(name,elf,expected,args):
+    command = [qemu,'-machine','virt','-smp','1','-m','2G','-nographic',
+               '-nic','none','-kernel','build/'+elf]+args
+    if (name in ('vm','user') or name.startswith('user-disk')) and os.environ.get('LOONGARCH_QEMU_TRACE') == '1':
+        command += ['-d','int','-D',str(out/(name+'-exceptions.log'))]
+    completed = None
+    try:
+        completed = subprocess.run(command,cwd=work,stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT,timeout=4)
+        output = completed.stdout
+    except subprocess.TimeoutExpired as event:
+        output = event.stdout or b''
+    (out/(name+'-qemu.log')).write_bytes(output)
+    if completed is not None:
+        raise RuntimeError(f'{name}: unexpectedly exited with {completed.returncode}; see log')
+    if b': FAIL' in output:
+        raise RuntimeError(f'{name}: explicit failure; see log')
+    cursor = 0
+    for token in expected:
+        found = output.find(token.encode(),cursor)
+        if found < 0:
+            raise RuntimeError(f'{name}: missing {token!r}; see log')
+        cursor = found+len(token)
+    manifest['results'].append({'case':name,'status':'PASS','command':command})
+    print(name+': PASS',flush=True)
+
 try:
-    for host_case in ('memory','vm'):
+    for host_case in ('memory','vm','user'):
         host_command = ['make','host-'+host_case]
         with (out/(host_case+'-host.log')).open('wb') as log:
             subprocess.run(host_command,cwd=work,stdout=log,
@@ -68,31 +101,14 @@ try:
                                     'command':host_command})
         print(host_case+'-host (ASan/UBSan): PASS',flush=True)
     for target, elf, expected in cases:
-        command = [qemu,'-machine','virt','-smp','1','-m','2G','-nographic',
-                   '-nic','none','-kernel','build/'+elf]
-        if target == 'vm' and os.environ.get('LOONGARCH_QEMU_TRACE') == '1':
-            command += ['-d','int','-D',str(out/'vm-exceptions.log')]
         with (out/(target+'-build.log')).open('wb') as log:
             subprocess.run(['make',target,'CROSS='+cross],cwd=work,
                            stdout=log,stderr=subprocess.STDOUT,check=True)
-        try:
-            completed = subprocess.run(command,cwd=work,stdout=subprocess.PIPE,
-                                       stderr=subprocess.STDOUT,timeout=4)
-            output = completed.stdout
-            raise RuntimeError(f'{target}: unexpectedly exited with {completed.returncode}: {output!r}')
-        except subprocess.TimeoutExpired as event:
-            output = event.stdout or b''
-        (out/(target+'-qemu.log')).write_bytes(output)
-        if b'memory: FAIL' in output or b'vm: FAIL' in output:
-            raise RuntimeError(f'{target}: explicit failure; see log')
-        cursor = 0
-        for token in expected:
-            found = output.find(token.encode(),cursor)
-            if found < 0:
-                raise RuntimeError(f'{target}: missing {token!r}; see log')
-            cursor = found+len(token)
-        manifest['results'].append({'case':target,'status':'PASS','command':command})
-        print(target+': PASS',flush=True)
+        run_guest(target,elf,expected,[])
+    with (out/'disk-build.log').open('wb') as log:
+        subprocess.run(['make','disk','user-disk','CROSS='+cross],cwd=work,
+                       stdout=log,stderr=subprocess.STDOUT,check=True)
+    run_disk_matrix(work,out,run_guest,manifest['results'])
 except Exception as error:
     manifest['results'].append({'status':'FAIL','error':str(error)})
     raise

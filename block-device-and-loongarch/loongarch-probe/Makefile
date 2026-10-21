@@ -25,6 +25,16 @@ memory: build/memory-probe.elf build/memory-probe.dis
 
 vm: build/vm-probe.elf build/vm-probe.dis
 
+user: build/user-probe.elf build/user-probe.dis
+
+disk: build/disk-probe.elf build/disk-reboot.elf build/disk-single.elf build/disk-error.elf
+
+user-disk: build/user-disk-probe.elf
+
+host-user: | build
+	$(HOST_CC) -std=c11 -O1 -g -Wall -Wextra -Werror -fno-omit-frame-pointer -fno-pie -no-pie -fsanitize=address,undefined page-allocator.c vm-table.c user-copy.c user-copy-host-test.c -o build/user-copy-host-test
+	./build/user-copy-host-test
+
 host-vm: | build
 	$(HOST_CC) -std=c11 -O1 -g -Wall -Wextra -Werror -fno-omit-frame-pointer -fno-pie -no-pie -fsanitize=address,undefined page-allocator.c vm-table.c vm-host-test.c -o build/vm-host-test
 	./build/vm-host-test
@@ -130,7 +140,61 @@ build/vm-probe.elf: build/vm-entry.o build/vm-vector.o build/vm-start.o build/vm
 build/vm-probe.dis: build/vm-probe.elf
 	$(OBJDUMP) -d -S $< > $@
 
+build/user-%.o: user-%.c user-copy.h vm-table.h page-allocator.h | build
+	$(CC) $(CFLAGS) -Werror -c $< -o $@
+
+build/user-%.o: user-%.S | build
+	$(CC) $(CFLAGS) -Werror -c $< -o $@
+
+build/user-probe.elf: build/user-entry.o build/user-vector.o build/user-payload.o build/user-runtime.o build/user-copy.o build/vm-table.o build/page-allocator.o memory-linker.ld
+	$(CC) $(LDFLAGS) -Wl,-T,memory-linker.ld $(filter %.o,$^) -o $@
+
+build/user-probe.dis: build/user-probe.elf
+	$(OBJDUMP) -d -S $< > $@
+
+build/user-disk-runtime.o: user-runtime.c user-copy.h vm-table.h pci-block.h | build
+	$(CC) $(CFLAGS) -Werror -DUSER_DISK=1 -c $< -o $@
+
+build/user-disk-payload.o: user-payload.S | build
+	$(CC) $(CFLAGS) -Werror -DUSER_DISK=1 -c $< -o $@
+
+build/user-disk-probe.elf: build/user-entry.o build/user-vector.o build/user-disk-payload.o build/user-disk-runtime.o build/user-copy.o build/vm-table.o build/page-allocator.o build/pci-block.o build/probe-mem.o memory-linker.ld
+	$(CC) $(LDFLAGS) -Wl,-T,memory-linker.ld $(filter %.o,$^) -o $@
+
+build/disk-entry.o: disk-entry.S | build
+	$(CC) $(CFLAGS) -Werror -c $< -o $@
+
+build/pci-block.o: pci-block.c pci-block.h | build
+	$(CC) $(CFLAGS) -Werror -c $< -o $@
+
+build/disk-test.o: disk-test.c pci-block.h | build
+	$(CC) $(CFLAGS) -Werror -c $< -o $@
+
+build/disk-reboot-test.o: disk-test.c pci-block.h | build
+	$(CC) $(CFLAGS) -Werror -DDISK_PHASE=2 -c $< -o $@
+
+build/disk-single-test.o: disk-test.c pci-block.h | build
+	$(CC) $(CFLAGS) -Werror -DEXPECTED_DISKS=1 -c $< -o $@
+
+build/disk-error-test.o: disk-test.c pci-block.h | build
+	$(CC) $(CFLAGS) -Werror -DDISK_IO_ERROR=1 -c $< -o $@
+
+build/probe-mem.o: probe-mem.c | build
+	$(CC) $(CFLAGS) -Werror -c $< -o $@
+
+build/disk-probe.elf: build/disk-entry.o build/pci-block.o build/disk-test.o build/probe-mem.o memory-linker.ld
+	$(CC) $(LDFLAGS) -Wl,-T,memory-linker.ld $(filter %.o,$^) -o $@
+
+build/disk-reboot.elf: build/disk-entry.o build/pci-block.o build/disk-reboot-test.o build/probe-mem.o memory-linker.ld
+	$(CC) $(LDFLAGS) -Wl,-T,memory-linker.ld $(filter %.o,$^) -o $@
+
+build/disk-single.elf: build/disk-entry.o build/pci-block.o build/disk-single-test.o build/probe-mem.o memory-linker.ld
+	$(CC) $(LDFLAGS) -Wl,-T,memory-linker.ld $(filter %.o,$^) -o $@
+
+build/disk-error.elf: build/disk-entry.o build/pci-block.o build/disk-error-test.o build/probe-mem.o memory-linker.ld
+	$(CC) $(LDFLAGS) -Wl,-T,memory-linker.ld $(filter %.o,$^) -o $@
+
 clean:
 	rm -rf build
 
-.PHONY: all exception timer return context memory host-memory vm host-vm build clean
+.PHONY: all exception timer return context memory host-memory vm host-vm user host-user disk user-disk build clean

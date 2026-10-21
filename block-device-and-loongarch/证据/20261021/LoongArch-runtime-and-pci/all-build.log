@@ -1,0 +1,5 @@
+mkdir -p build
+/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-gcc -march=loongarch64 -mabi=lp64d -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -fno-builtin -O2 -Wall -Wextra -c start.c -o build/start.o
+/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-gcc -nostdlib -nostartfiles -nodefaultlibs -static -no-pie -Wl,--build-id=none -Wl,-T,linker.ld build/start.o -o build/loongarch-probe.elf
+/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-objcopy -O binary build/loongarch-probe.elf build/loongarch-probe.bin
+/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-objdump -d -S build/loongarch-probe.elf > build/loongarch-probe.dis
