@@ -1,0 +1,50 @@
+> e2fsck -fn /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img
+e2fsck 1.46.5 (30-Dec-2021)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+/mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img: 20/8192 files (0.0% non-contiguous), 1094/32768 blocks
+> debugfs -R dump /b-copy.bin /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/export-b-copy.bin /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img
+debugfs 1.46.5 (30-Dec-2021)
+> debugfs -R dump /b-empty /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/export-b-empty /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img
+debugfs 1.46.5 (30-Dec-2021)
+> debugfs -R dump /b-short /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/export-b-short /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img
+debugfs 1.46.5 (30-Dec-2021)
+> debugfs -R dump /b-limit /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/export-b-limit /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img
+debugfs 1.46.5 (30-Dec-2021)
+> debugfs -R dump /b-overwrite /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/export-b-overwrite /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img
+debugfs 1.46.5 (30-Dec-2021)
+> debugfs -R dump /b-badptr /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/export-b-badptr /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img
+debugfs 1.46.5 (30-Dec-2021)
+> debugfs -R dump /hello.txt /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/export-hello.txt /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img
+debugfs 1.46.5 (30-Dec-2021)
+> debugfs -R dump /multi.bin /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/export-multi.bin /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img
+debugfs 1.46.5 (30-Dec-2021)
+> debugfs -R dump /indirect.bin /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/export-indirect.bin /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img
+debugfs 1.46.5 (30-Dec-2021)
+> e2fsck -fn /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/blocks.img
+e2fsck 1.46.5 (30-Dec-2021)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+/mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/blocks.img: 21/64 files (0.0% non-contiguous), 128/128 blocks
+> e2fsck -fn /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/inodes.img
+e2fsck 1.46.5 (30-Dec-2021)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+/mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/inodes.img: 16/16 files (0.0% non-contiguous), 20/128 blocks
+> e2fsck -fn /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/directory.img
+e2fsck 1.46.5 (30-Dec-2021)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+/mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/directory.img: 20/64 files (0.0% non-contiguous), 26/128 blocks

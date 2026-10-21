@@ -1,0 +1,80 @@
+> mke2fs -t ext2 -F -b 1024 -I 128 -O none /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img
+mke2fs 1.46.5 (30-Dec-2021)
+128-byte inodes cannot handle dates beyond 2038 and are deprecated
+Creating filesystem with 32768 1k blocks and 8192 inodes
+Filesystem UUID: 9d58fff0-29f9-40e6-9bab-ee8553dae02e
+Superblock backups stored on blocks: 
+	8193, 16385, 24577
+
+Allocating group tables: 0/4   done                            
+Writing inode tables: 0/4   done                            
+Writing superblocks and filesystem accounting information: 0/4   done
+
+> debugfs -w -R write /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/hello.txt /hello.txt /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img
+debugfs 1.46.5 (30-Dec-2021)
+Allocated inode: 12
+> debugfs -w -R write /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/multi.bin /multi.bin /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img
+debugfs 1.46.5 (30-Dec-2021)
+Allocated inode: 13
+> debugfs -w -R write /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/indirect.bin /indirect.bin /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img
+debugfs 1.46.5 (30-Dec-2021)
+Allocated inode: 14
+> e2fsck -fn /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img
+e2fsck 1.46.5 (30-Dec-2021)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+/mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/ext2.img: 14/8192 files (0.0% non-contiguous), 1073/32768 blocks
+> mke2fs -t ext2 -F -b 1024 -I 128 -O none -m 0 -N 64 /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/blocks.img
+mke2fs 1.46.5 (30-Dec-2021)
+128-byte inodes cannot handle dates beyond 2038 and are deprecated
+Creating filesystem with 128 1k blocks and 64 inodes
+
+Allocating group tables: 0/1   done                            
+Writing inode tables: 0/1   done                            
+Writing superblocks and filesystem accounting information: 0/1   done
+
+> e2fsck -fn /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/blocks.img
+e2fsck 1.46.5 (30-Dec-2021)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+/mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/blocks.img: 11/64 files (0.0% non-contiguous), 26/128 blocks
+> mke2fs -t ext2 -F -b 1024 -I 128 -O none -m 0 -N 16 /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/inodes.img
+mke2fs 1.46.5 (30-Dec-2021)
+128-byte inodes cannot handle dates beyond 2038 and are deprecated
+Creating filesystem with 128 1k blocks and 16 inodes
+
+Allocating group tables: 0/1   done                            
+Writing inode tables: 0/1   done                            
+Writing superblocks and filesystem accounting information: 0/1   done
+
+> e2fsck -fn /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/inodes.img
+e2fsck 1.46.5 (30-Dec-2021)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+/mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/inodes.img: 11/16 files (0.0% non-contiguous), 20/128 blocks
+> mke2fs -t ext2 -F -b 1024 -I 128 -O none -m 0 -N 64 /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/directory.img
+mke2fs 1.46.5 (30-Dec-2021)
+128-byte inodes cannot handle dates beyond 2038 and are deprecated
+Creating filesystem with 128 1k blocks and 64 inodes
+
+Allocating group tables: 0/1   done                            
+Writing inode tables: 0/1   done                            
+Writing superblocks and filesystem accounting information: 0/1   done
+
+> e2fsck -fn /mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/directory.img
+e2fsck 1.46.5 (30-Dec-2021)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+/mnt/c/Users/a1863/Documents/ChatGPT/oswork/AdvancedOS-on-Ubuntu/xv6-riscv/test-output/ext2-write-20261021-verified/directory.img: 11/64 files (0.0% non-contiguous), 26/128 blocks

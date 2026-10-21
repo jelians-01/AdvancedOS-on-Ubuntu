@@ -1,0 +1,46 @@
+{
+  "format": "ext2,32MiB,1KiB blocks,128-byte inodes,-O none",
+  "cpu_count": 3,
+  "machine": "virt",
+  "cache": "writeback",
+  "kernel_sha256": "076af81ec34628af9ea4c539210334a9b90e79e6c0ed7de15e9d71ef24f1b2da",
+  "initial_image_sha256": "dca2fe65e68264339c9a64e4d4d5b067c0ffac57b55046d90c5c872fcea89092",
+  "initial_super_free": [
+    31695,
+    8178
+  ],
+  "results": [
+    "write and native targeted regression: PASS",
+    "same-image reboot readback: PASS",
+    "readonly device refusal and unchanged hash: PASS",
+    "blocks exhaustion/retry: PASS",
+    "inodes exhaustion/retry: PASS",
+    "directory exhaustion/retry: PASS",
+    "e2fsck -fn: PASS",
+    "all host byte comparisons: PASS",
+    "exact allocation/reclamation counters: PASS",
+    "blocks fsck and exact counters: PASS",
+    "inodes fsck and exact counters: PASS",
+    "directory fsck and exact counters: PASS"
+  ],
+  "edge_initial_free": {
+    "blocks": [
+      102,
+      53
+    ],
+    "inodes": [
+      108,
+      5
+    ],
+    "directory": [
+      102,
+      53
+    ]
+  },
+  "qemu": "QEMU emulator version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)",
+  "final_image_sha256": "6b98fba3219b97c3c3add8eac7385c2784871689c3755179dad868ef3adf804f",
+  "final_super_free": [
+    31674,
+    8172
+  ]
+}
