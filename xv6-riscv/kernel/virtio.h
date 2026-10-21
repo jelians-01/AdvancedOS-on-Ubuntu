@@ -14,7 +14,9 @@
 #define VIRTIO_MMIO_DEVICE_ID		0x008 // device type; 1 is net, 2 is disk
 #define VIRTIO_MMIO_VENDOR_ID		0x00c // 0x554d4551
 #define VIRTIO_MMIO_DEVICE_FEATURES	0x010
+#define VIRTIO_MMIO_DEVICE_FEATURES_SEL 0x014
 #define VIRTIO_MMIO_DRIVER_FEATURES	0x020
+#define VIRTIO_MMIO_DRIVER_FEATURES_SEL 0x024
 #define VIRTIO_MMIO_QUEUE_SEL		0x030 // select queue, write-only
 #define VIRTIO_MMIO_QUEUE_NUM_MAX	0x034 // max size of current queue, read-only
 #define VIRTIO_MMIO_QUEUE_NUM		0x038 // size of current queue, write-only
@@ -23,6 +25,8 @@
 #define VIRTIO_MMIO_INTERRUPT_STATUS	0x060 // read-only
 #define VIRTIO_MMIO_INTERRUPT_ACK	0x064 // write-only
 #define VIRTIO_MMIO_STATUS		0x070 // read/write
+#define VIRTIO_MMIO_CONFIG_GENERATION 0x0fc
+#define VIRTIO_MMIO_CONFIG 0x100
 #define VIRTIO_MMIO_QUEUE_DESC_LOW	0x080 // physical address for descriptor table, write-only
 #define VIRTIO_MMIO_QUEUE_DESC_HIGH	0x084
 #define VIRTIO_MMIO_DRIVER_DESC_LOW	0x090 // physical address for available ring, write-only
@@ -38,6 +42,7 @@
 
 // device feature bits
 #define VIRTIO_BLK_F_RO              5	/* Disk is read-only */
+#define VIRTIO_BLK_F_FLUSH           9
 #define VIRTIO_BLK_F_SCSI            7	/* Supports scsi command passthru */
 #define VIRTIO_BLK_F_CONFIG_WCE     11	/* Writeback mode available in config */
 #define VIRTIO_BLK_F_MQ             12	/* support more than one vq */
@@ -85,6 +90,7 @@ struct virtq_used {
 
 #define VIRTIO_BLK_T_IN  0 // read the disk
 #define VIRTIO_BLK_T_OUT 1 // write the disk
+#define VIRTIO_BLK_T_FLUSH 4
 
 // the format of the first descriptor in a disk request.
 // to be followed by two more descriptors containing

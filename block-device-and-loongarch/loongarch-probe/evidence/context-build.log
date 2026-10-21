@@ -1,0 +1,4 @@
+mkdir -p build
+9000000000200000 T _start
+90000000002000b0 T context_main
+9000000000200180 T switch_context

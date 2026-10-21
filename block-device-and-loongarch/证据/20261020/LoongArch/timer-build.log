@@ -1,0 +1,5 @@
+mkdir -p build
+/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-gcc -march=loongarch64 -mabi=lp64d -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -fno-builtin -O2 -Wall -Wextra -c timer-start.c -o build/timer-start.o
+/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-gcc -march=loongarch64 -mabi=lp64d -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -fno-builtin -O2 -Wall -Wextra -c timer-vector.S -o build/timer-vector.o
+/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-gcc -nostdlib -nostartfiles -nodefaultlibs -static -no-pie -Wl,--build-id=none -Wl,-T,exception-linker.ld build/timer-start.o build/timer-vector.o -o build/timer-probe.elf
+/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-objdump -d -S build/timer-probe.elf > build/timer-probe.dis

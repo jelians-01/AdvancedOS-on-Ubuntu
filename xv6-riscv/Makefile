@@ -33,6 +33,13 @@ OBJS = \
   $K/kernelvec.o \
   $K/plic.o \
   $K/virtio_disk.o
+OBJS += $K/blkdev.o
+
+# Diagnostic code is compiled only for disposable test images.
+ifeq ($(BLKDEV_SELFTEST),1)
+OBJS += $K/blkdev_test.o
+CFLAGS_EXTRA = -DBLKDEV_SELFTEST
+endif
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-
 # perhaps in /opt/riscv/bin
@@ -75,6 +82,7 @@ CFLAGS += -fno-builtin-free
 CFLAGS += -fno-builtin-memcpy -Wno-main
 CFLAGS += -fno-builtin-printf -fno-builtin-fprintf -fno-builtin-vprintf
 CFLAGS += -I.
+CFLAGS += $(CFLAGS_EXTRA) $(EXTRA_CFLAGS)
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
 # Disable PIE when possible (for Ubuntu 16.10 toolchain)
@@ -177,6 +185,16 @@ QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nogr
 QEMUOPTS += -global virtio-mmio.force-legacy=false
 QEMUOPTS += -drive file=fs.img,if=none,format=raw,id=x0
 QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
+
+# Optional raw data volumes: explicit buses define the dev mapping.
+ifneq ($(DISK2),)
+QEMUOPTS += -drive file=$(DISK2),if=none,format=raw,id=x1,cache=writeback
+QEMUOPTS += -device virtio-blk-device,drive=x1,bus=virtio-mmio-bus.1
+endif
+ifneq ($(DISK3),)
+QEMUOPTS += -drive file=$(DISK3),if=none,format=raw,id=x2,cache=writeback
+QEMUOPTS += -device virtio-blk-device,drive=x2,bus=virtio-mmio-bus.2
+endif
 
 qemu: check-qemu-version $K/kernel fs.img
 	$(QEMU) $(QEMUOPTS)

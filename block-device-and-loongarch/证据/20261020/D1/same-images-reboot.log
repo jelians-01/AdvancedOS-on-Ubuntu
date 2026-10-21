@@ -1,0 +1,15 @@
+
+xv6 kernel is booting
+
+blkdev: dev=1 mmio=0x0000000010001000 sectors=4000 ro=0 flush=1
+blkdev: dev=2 mmio=0x0000000010002000 sectors=8192 ro=0 flush=1
+blkdev: dev=3 mmio=0x0000000010003000 sectors=8192 ro=0 flush=1
+hart 1 starting
+hart 2 starting
+init: starting sh
+$ echo C_READY > ccheck
+$ cat ccheck
+C_READY
+$ rm ccheck
+$ QEMU: Terminated
+

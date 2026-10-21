@@ -2,6 +2,7 @@
 #include "param.h"
 #include "memlayout.h"
 #include "riscv.h"
+#include "virtio_disk.h"
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
@@ -195,8 +196,8 @@ devintr()
 
     if(irq == UART0_IRQ){
       uartintr();
-    } else if(irq == VIRTIO0_IRQ){
-      virtio_disk_intr();
+    } else if(irq >= VIRTIO0_IRQ && irq < VIRTIO0_IRQ + VDISK_COUNT){
+      virtio_disk_intr_dev(irq - VIRTIO0_IRQ + 1);
     } else if(irq){
       printf("unexpected interrupt irq=%d\n", irq);
     }
@@ -216,4 +217,3 @@ devintr()
     return 0;
   }
 }
-

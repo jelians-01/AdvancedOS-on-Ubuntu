@@ -1,0 +1,6 @@
+mkdir -p build
+/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-gcc -march=loongarch64 -mabi=lp64d -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -fno-builtin -O2 -Wall -Wextra -c context-start.c -o build/context-start.o
+/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-gcc -march=loongarch64 -mabi=lp64d -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -fno-builtin -O2 -Wall -Wextra -c context-entry.S -o build/context-entry.o
+/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-gcc -march=loongarch64 -mabi=lp64d -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -fno-builtin -O2 -Wall -Wextra -c context-switch.S -o build/context-switch.o
+/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-gcc -nostdlib -nostartfiles -nodefaultlibs -static -no-pie -Wl,--build-id=none -Wl,-T,context-linker.ld build/context-start.o build/context-entry.o build/context-switch.o -o build/context-probe.elf
+/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-objdump -d -S build/context-probe.elf > build/context-probe.dis
