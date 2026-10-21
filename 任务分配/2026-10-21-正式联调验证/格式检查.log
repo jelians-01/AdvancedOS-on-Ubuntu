@@ -1,0 +1,198 @@
+Restore original mkfs source for reproducible builds
+xv6-riscv/mkfs/mkfs.c:137: trailing whitespace.
++    
+xv6-riscv/mkfs/mkfs.c:151: trailing whitespace.
++    
+Integrate C multi-disk D1 fixes and LoongArch probes
+block-device-and-loongarch/LoongArch阶段第一阶段交付说明.md:46: new blank line at EOF.
+block-device-and-loongarch/loongarch-probe/evidence/build.log:14: trailing whitespace.
++  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00 
+block-device-and-loongarch/loongarch-probe/evidence/context-qemu.log:1: trailing whitespace.
++context: main
+block-device-and-loongarch/loongarch-probe/evidence/context-qemu.log:2: trailing whitespace.
++context: worker
+block-device-and-loongarch/loongarch-probe/evidence/context-qemu.log:3: trailing whitespace.
++context: main resumed
+block-device-and-loongarch/loongarch-probe/evidence/context-qemu.log:4: trailing whitespace.
++context: worker resumed
+block-device-and-loongarch/loongarch-probe/evidence/context-qemu.log:5: trailing whitespace.
++context: complete
+block-device-and-loongarch/loongarch-probe/evidence/exception-qemu.log:1: trailing whitespace.
++exception probe: before syscall
+block-device-and-loongarch/loongarch-probe/evidence/qemu.log:1: trailing whitespace.
++loongarch probe: hello
+block-device-and-loongarch/loongarch-probe/evidence/return-qemu.log:1: trailing whitespace.
++trap return: before syscall
+block-device-and-loongarch/loongarch-probe/evidence/return-qemu.log:3: trailing whitespace.
++trap return: after ertn
+block-device-and-loongarch/证据/20261020/D1/d1-build.log:54: trailing whitespace.
++riscv64-linux-gnu-ld -z max-page-size=4096 -T kernel/kernel.ld -o kernel/kernel kernel/entry.o kernel/start.o kernel/console.o kernel/printf.o kernel/uart.o kernel/kalloc.o kernel/spinlock.o kernel/string.o kernel/main.o kernel/vm.o kernel/proc.o kernel/swtch.o kernel/trampoline.o kernel/trap.o kernel/syscall.o kernel/sysproc.o kernel/bio.o kernel/fs.o kernel/log.o kernel/sleeplock.o kernel/file.o kernel/pipe.o kernel/exec.o kernel/sysfile.o kernel/kernelvec.o kernel/plic.o kernel/virtio_disk.o kernel/blkdev.o kernel/blkdev_test.o 
+block-device-and-loongarch/证据/20261020/D1/d1-build.log:116: trailing whitespace.
++mkfs/mkfs fs.img README user/_cat user/_echo user/_forktest user/_grep user/_init user/_kill user/_ln user/_ls user/_mkdir user/_rm user/_sh user/_stressfs user/_usertests user/_grind user/_wc user/_zombie user/_logstress user/_forphan user/_dorphan 
+block-device-and-loongarch/证据/20261020/D1/guest-reboot-readback.log:16: trailing whitespace.
++
+block-device-and-loongarch/证据/20261020/D1/guest-reboot-readback.log:16: new blank line at EOF.
+block-device-and-loongarch/证据/20261020/D1/native-regression.log:367: trailing whitespace.
++
+block-device-and-loongarch/证据/20261020/D1/native-regression.log:367: new blank line at EOF.
+block-device-and-loongarch/证据/20261020/D1/normal-build.log:53: trailing whitespace.
++riscv64-linux-gnu-ld -z max-page-size=4096 -T kernel/kernel.ld -o kernel/kernel kernel/entry.o kernel/start.o kernel/console.o kernel/printf.o kernel/uart.o kernel/kalloc.o kernel/spinlock.o kernel/string.o kernel/main.o kernel/vm.o kernel/proc.o kernel/swtch.o kernel/trampoline.o kernel/trap.o kernel/syscall.o kernel/sysproc.o kernel/bio.o kernel/fs.o kernel/log.o kernel/sleeplock.o kernel/file.o kernel/pipe.o kernel/exec.o kernel/sysfile.o kernel/kernelvec.o kernel/plic.o kernel/virtio_disk.o kernel/blkdev.o 
+block-device-and-loongarch/证据/20261020/D1/normal-build.log:115: trailing whitespace.
++mkfs/mkfs fs.img README user/_cat user/_echo user/_forktest user/_grep user/_init user/_kill user/_ln user/_ls user/_mkdir user/_rm user/_sh user/_stressfs user/_usertests user/_grind user/_wc user/_zombie user/_logstress user/_forphan user/_dorphan 
+block-device-and-loongarch/证据/20261020/D1/persistence-build.log:54: trailing whitespace.
++riscv64-linux-gnu-ld -z max-page-size=4096 -T kernel/kernel.ld -o kernel/kernel kernel/entry.o kernel/start.o kernel/console.o kernel/printf.o kernel/uart.o kernel/kalloc.o kernel/spinlock.o kernel/string.o kernel/main.o kernel/vm.o kernel/proc.o kernel/swtch.o kernel/trampoline.o kernel/trap.o kernel/syscall.o kernel/sysproc.o kernel/bio.o kernel/fs.o kernel/log.o kernel/sleeplock.o kernel/file.o kernel/pipe.o kernel/exec.o kernel/sysfile.o kernel/kernelvec.o kernel/plic.o kernel/virtio_disk.o kernel/blkdev.o kernel/blkdev_test.o 
+block-device-and-loongarch/证据/20261020/D1/persistence-build.log:116: trailing whitespace.
++mkfs/mkfs fs.img README user/_cat user/_echo user/_forktest user/_grep user/_init user/_kill user/_ln user/_ls user/_mkdir user/_rm user/_sh user/_stressfs user/_usertests user/_grind user/_wc user/_zombie user/_logstress user/_forphan user/_dorphan 
+block-device-and-loongarch/证据/20261020/D1/read-only-device.log:32: trailing whitespace.
++
+block-device-and-loongarch/证据/20261020/D1/read-only-device.log:32: new blank line at EOF.
+block-device-and-loongarch/证据/20261020/D1/readonly-build.log:54: trailing whitespace.
++riscv64-linux-gnu-ld -z max-page-size=4096 -T kernel/kernel.ld -o kernel/kernel kernel/entry.o kernel/start.o kernel/console.o kernel/printf.o kernel/uart.o kernel/kalloc.o kernel/spinlock.o kernel/string.o kernel/main.o kernel/vm.o kernel/proc.o kernel/swtch.o kernel/trampoline.o kernel/trap.o kernel/syscall.o kernel/sysproc.o kernel/bio.o kernel/fs.o kernel/log.o kernel/sleeplock.o kernel/file.o kernel/pipe.o kernel/exec.o kernel/sysfile.o kernel/kernelvec.o kernel/plic.o kernel/virtio_disk.o kernel/blkdev.o kernel/blkdev_test.o 
+block-device-and-loongarch/证据/20261020/D1/readonly-build.log:116: trailing whitespace.
++mkfs/mkfs fs.img README user/_cat user/_echo user/_forktest user/_grep user/_init user/_kill user/_ln user/_ls user/_mkdir user/_rm user/_sh user/_stressfs user/_usertests user/_grind user/_wc user/_zombie user/_logstress user/_forphan user/_dorphan 
+block-device-and-loongarch/证据/20261020/D1/same-images-reboot.log:15: trailing whitespace.
++
+block-device-and-loongarch/证据/20261020/D1/same-images-reboot.log:15: new blank line at EOF.
+block-device-and-loongarch/证据/20261020/D1/single-root-compatibility.log:13: trailing whitespace.
++
+block-device-and-loongarch/证据/20261020/D1/single-root-compatibility.log:13: new blank line at EOF.
+block-device-and-loongarch/证据/20261020/D1/three-device-d1.log:32: trailing whitespace.
++
+block-device-and-loongarch/证据/20261020/D1/three-device-d1.log:32: new blank line at EOF.
+block-device-and-loongarch/证据/20261020/LoongArch/all-qemu.log:1: trailing whitespace.
++loongarch probe: hello
+block-device-and-loongarch/证据/20261020/LoongArch/context-qemu.log:1: trailing whitespace.
++context: main
+block-device-and-loongarch/证据/20261020/LoongArch/context-qemu.log:2: trailing whitespace.
++context: worker
+block-device-and-loongarch/证据/20261020/LoongArch/context-qemu.log:3: trailing whitespace.
++context: main resumed
+block-device-and-loongarch/证据/20261020/LoongArch/context-qemu.log:4: trailing whitespace.
++context: worker resumed
+block-device-and-loongarch/证据/20261020/LoongArch/context-qemu.log:5: trailing whitespace.
++context: complete
+block-device-and-loongarch/证据/20261020/LoongArch/exception-qemu.log:1: trailing whitespace.
++exception probe: before syscall
+block-device-and-loongarch/证据/20261020/LoongArch/return-qemu.log:1: trailing whitespace.
++trap return: before syscall
+block-device-and-loongarch/证据/20261020/LoongArch/return-qemu.log:3: trailing whitespace.
++trap return: after ertn
+block-device-and-loongarch/证据/guest-reboot-readback.log:16: trailing whitespace.
++
+block-device-and-loongarch/证据/guest-reboot-readback.log:16: new blank line at EOF.
+block-device-and-loongarch/证据/native-regression.log:367: trailing whitespace.
++
+block-device-and-loongarch/证据/native-regression.log:367: new blank line at EOF.
+block-device-and-loongarch/证据/normal-local-build.log:53: trailing whitespace.
++riscv64-linux-gnu-ld -z max-page-size=4096 -T kernel/kernel.ld -o kernel/kernel kernel/entry.o kernel/start.o kernel/console.o kernel/printf.o kernel/uart.o kernel/kalloc.o kernel/spinlock.o kernel/string.o kernel/main.o kernel/vm.o kernel/proc.o kernel/swtch.o kernel/trampoline.o kernel/trap.o kernel/syscall.o kernel/sysproc.o kernel/bio.o kernel/fs.o kernel/log.o kernel/sleeplock.o kernel/file.o kernel/pipe.o kernel/exec.o kernel/sysfile.o kernel/kernelvec.o kernel/plic.o kernel/virtio_disk.o kernel/blkdev.o 
+block-device-and-loongarch/证据/normal-local-build.log:115: trailing whitespace.
++mkfs/mkfs fs.img README user/_cat user/_echo user/_forktest user/_grep user/_init user/_kill user/_ln user/_ls user/_mkdir user/_rm user/_sh user/_stressfs user/_usertests user/_grind user/_wc user/_zombie user/_logstress user/_forphan user/_dorphan 
+block-device-and-loongarch/证据/read-only-device.log:29: trailing whitespace.
++
+block-device-and-loongarch/证据/read-only-device.log:29: new blank line at EOF.
+block-device-and-loongarch/证据/same-images-reboot.log:15: trailing whitespace.
++
+block-device-and-loongarch/证据/same-images-reboot.log:15: new blank line at EOF.
+block-device-and-loongarch/证据/single-root-compatibility.log:13: trailing whitespace.
++
+block-device-and-loongarch/证据/single-root-compatibility.log:13: new blank line at EOF.
+block-device-and-loongarch/证据/three-device-d1.log:29: trailing whitespace.
++
+block-device-and-loongarch/证据/three-device-d1.log:29: new blank line at EOF.
+Integrate C multi-disk D1 fixes and LoongArch probes
+block-device-and-loongarch/LoongArch阶段第一阶段交付说明.md:46: new blank line at EOF.
+block-device-and-loongarch/loongarch-probe/evidence/build.log:14: trailing whitespace.
++  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00 
+block-device-and-loongarch/loongarch-probe/evidence/context-qemu.log:1: trailing whitespace.
++context: main
+block-device-and-loongarch/loongarch-probe/evidence/context-qemu.log:2: trailing whitespace.
++context: worker
+block-device-and-loongarch/loongarch-probe/evidence/context-qemu.log:3: trailing whitespace.
++context: main resumed
+block-device-and-loongarch/loongarch-probe/evidence/context-qemu.log:4: trailing whitespace.
++context: worker resumed
+block-device-and-loongarch/loongarch-probe/evidence/context-qemu.log:5: trailing whitespace.
++context: complete
+block-device-and-loongarch/loongarch-probe/evidence/exception-qemu.log:1: trailing whitespace.
++exception probe: before syscall
+block-device-and-loongarch/loongarch-probe/evidence/qemu.log:1: trailing whitespace.
++loongarch probe: hello
+block-device-and-loongarch/loongarch-probe/evidence/return-qemu.log:1: trailing whitespace.
++trap return: before syscall
+block-device-and-loongarch/loongarch-probe/evidence/return-qemu.log:3: trailing whitespace.
++trap return: after ertn
+block-device-and-loongarch/证据/20261020/D1/d1-build.log:54: trailing whitespace.
++riscv64-linux-gnu-ld -z max-page-size=4096 -T kernel/kernel.ld -o kernel/kernel kernel/entry.o kernel/start.o kernel/console.o kernel/printf.o kernel/uart.o kernel/kalloc.o kernel/spinlock.o kernel/string.o kernel/main.o kernel/vm.o kernel/proc.o kernel/swtch.o kernel/trampoline.o kernel/trap.o kernel/syscall.o kernel/sysproc.o kernel/bio.o kernel/fs.o kernel/log.o kernel/sleeplock.o kernel/file.o kernel/pipe.o kernel/exec.o kernel/sysfile.o kernel/kernelvec.o kernel/plic.o kernel/virtio_disk.o kernel/blkdev.o kernel/blkdev_test.o 
+block-device-and-loongarch/证据/20261020/D1/d1-build.log:116: trailing whitespace.
++mkfs/mkfs fs.img README user/_cat user/_echo user/_forktest user/_grep user/_init user/_kill user/_ln user/_ls user/_mkdir user/_rm user/_sh user/_stressfs user/_usertests user/_grind user/_wc user/_zombie user/_logstress user/_forphan user/_dorphan 
+block-device-and-loongarch/证据/20261020/D1/guest-reboot-readback.log:16: trailing whitespace.
++
+block-device-and-loongarch/证据/20261020/D1/guest-reboot-readback.log:16: new blank line at EOF.
+block-device-and-loongarch/证据/20261020/D1/native-regression.log:367: trailing whitespace.
++
+block-device-and-loongarch/证据/20261020/D1/native-regression.log:367: new blank line at EOF.
+block-device-and-loongarch/证据/20261020/D1/normal-build.log:53: trailing whitespace.
++riscv64-linux-gnu-ld -z max-page-size=4096 -T kernel/kernel.ld -o kernel/kernel kernel/entry.o kernel/start.o kernel/console.o kernel/printf.o kernel/uart.o kernel/kalloc.o kernel/spinlock.o kernel/string.o kernel/main.o kernel/vm.o kernel/proc.o kernel/swtch.o kernel/trampoline.o kernel/trap.o kernel/syscall.o kernel/sysproc.o kernel/bio.o kernel/fs.o kernel/log.o kernel/sleeplock.o kernel/file.o kernel/pipe.o kernel/exec.o kernel/sysfile.o kernel/kernelvec.o kernel/plic.o kernel/virtio_disk.o kernel/blkdev.o 
+block-device-and-loongarch/证据/20261020/D1/normal-build.log:115: trailing whitespace.
++mkfs/mkfs fs.img README user/_cat user/_echo user/_forktest user/_grep user/_init user/_kill user/_ln user/_ls user/_mkdir user/_rm user/_sh user/_stressfs user/_usertests user/_grind user/_wc user/_zombie user/_logstress user/_forphan user/_dorphan 
+block-device-and-loongarch/证据/20261020/D1/persistence-build.log:54: trailing whitespace.
++riscv64-linux-gnu-ld -z max-page-size=4096 -T kernel/kernel.ld -o kernel/kernel kernel/entry.o kernel/start.o kernel/console.o kernel/printf.o kernel/uart.o kernel/kalloc.o kernel/spinlock.o kernel/string.o kernel/main.o kernel/vm.o kernel/proc.o kernel/swtch.o kernel/trampoline.o kernel/trap.o kernel/syscall.o kernel/sysproc.o kernel/bio.o kernel/fs.o kernel/log.o kernel/sleeplock.o kernel/file.o kernel/pipe.o kernel/exec.o kernel/sysfile.o kernel/kernelvec.o kernel/plic.o kernel/virtio_disk.o kernel/blkdev.o kernel/blkdev_test.o 
+block-device-and-loongarch/证据/20261020/D1/persistence-build.log:116: trailing whitespace.
++mkfs/mkfs fs.img README user/_cat user/_echo user/_forktest user/_grep user/_init user/_kill user/_ln user/_ls user/_mkdir user/_rm user/_sh user/_stressfs user/_usertests user/_grind user/_wc user/_zombie user/_logstress user/_forphan user/_dorphan 
+block-device-and-loongarch/证据/20261020/D1/read-only-device.log:32: trailing whitespace.
++
+block-device-and-loongarch/证据/20261020/D1/read-only-device.log:32: new blank line at EOF.
+block-device-and-loongarch/证据/20261020/D1/readonly-build.log:54: trailing whitespace.
++riscv64-linux-gnu-ld -z max-page-size=4096 -T kernel/kernel.ld -o kernel/kernel kernel/entry.o kernel/start.o kernel/console.o kernel/printf.o kernel/uart.o kernel/kalloc.o kernel/spinlock.o kernel/string.o kernel/main.o kernel/vm.o kernel/proc.o kernel/swtch.o kernel/trampoline.o kernel/trap.o kernel/syscall.o kernel/sysproc.o kernel/bio.o kernel/fs.o kernel/log.o kernel/sleeplock.o kernel/file.o kernel/pipe.o kernel/exec.o kernel/sysfile.o kernel/kernelvec.o kernel/plic.o kernel/virtio_disk.o kernel/blkdev.o kernel/blkdev_test.o 
+block-device-and-loongarch/证据/20261020/D1/readonly-build.log:116: trailing whitespace.
++mkfs/mkfs fs.img README user/_cat user/_echo user/_forktest user/_grep user/_init user/_kill user/_ln user/_ls user/_mkdir user/_rm user/_sh user/_stressfs user/_usertests user/_grind user/_wc user/_zombie user/_logstress user/_forphan user/_dorphan 
+block-device-and-loongarch/证据/20261020/D1/same-images-reboot.log:15: trailing whitespace.
++
+block-device-and-loongarch/证据/20261020/D1/same-images-reboot.log:15: new blank line at EOF.
+block-device-and-loongarch/证据/20261020/D1/single-root-compatibility.log:13: trailing whitespace.
++
+block-device-and-loongarch/证据/20261020/D1/single-root-compatibility.log:13: new blank line at EOF.
+block-device-and-loongarch/证据/20261020/D1/three-device-d1.log:32: trailing whitespace.
++
+block-device-and-loongarch/证据/20261020/D1/three-device-d1.log:32: new blank line at EOF.
+block-device-and-loongarch/证据/20261020/LoongArch/all-qemu.log:1: trailing whitespace.
++loongarch probe: hello
+block-device-and-loongarch/证据/20261020/LoongArch/context-qemu.log:1: trailing whitespace.
++context: main
+block-device-and-loongarch/证据/20261020/LoongArch/context-qemu.log:2: trailing whitespace.
++context: worker
+block-device-and-loongarch/证据/20261020/LoongArch/context-qemu.log:3: trailing whitespace.
++context: main resumed
+block-device-and-loongarch/证据/20261020/LoongArch/context-qemu.log:4: trailing whitespace.
++context: worker resumed
+block-device-and-loongarch/证据/20261020/LoongArch/context-qemu.log:5: trailing whitespace.
++context: complete
+block-device-and-loongarch/证据/20261020/LoongArch/exception-qemu.log:1: trailing whitespace.
++exception probe: before syscall
+block-device-and-loongarch/证据/20261020/LoongArch/return-qemu.log:1: trailing whitespace.
++trap return: before syscall
+block-device-and-loongarch/证据/20261020/LoongArch/return-qemu.log:3: trailing whitespace.
++trap return: after ertn
+block-device-and-loongarch/证据/guest-reboot-readback.log:16: trailing whitespace.
++
+block-device-and-loongarch/证据/guest-reboot-readback.log:16: new blank line at EOF.
+block-device-and-loongarch/证据/native-regression.log:367: trailing whitespace.
++
+block-device-and-loongarch/证据/native-regression.log:367: new blank line at EOF.
+block-device-and-loongarch/证据/normal-local-build.log:53: trailing whitespace.
++riscv64-linux-gnu-ld -z max-page-size=4096 -T kernel/kernel.ld -o kernel/kernel kernel/entry.o kernel/start.o kernel/console.o kernel/printf.o kernel/uart.o kernel/kalloc.o kernel/spinlock.o kernel/string.o kernel/main.o kernel/vm.o kernel/proc.o kernel/swtch.o kernel/trampoline.o kernel/trap.o kernel/syscall.o kernel/sysproc.o kernel/bio.o kernel/fs.o kernel/log.o kernel/sleeplock.o kernel/file.o kernel/pipe.o kernel/exec.o kernel/sysfile.o kernel/kernelvec.o kernel/plic.o kernel/virtio_disk.o kernel/blkdev.o 
+block-device-and-loongarch/证据/normal-local-build.log:115: trailing whitespace.
++mkfs/mkfs fs.img README user/_cat user/_echo user/_forktest user/_grep user/_init user/_kill user/_ln user/_ls user/_mkdir user/_rm user/_sh user/_stressfs user/_usertests user/_grind user/_wc user/_zombie user/_logstress user/_forphan user/_dorphan 
+block-device-and-loongarch/证据/read-only-device.log:29: trailing whitespace.
++
+block-device-and-loongarch/证据/read-only-device.log:29: new blank line at EOF.
+block-device-and-loongarch/证据/same-images-reboot.log:15: trailing whitespace.
++
+block-device-and-loongarch/证据/same-images-reboot.log:15: new blank line at EOF.
+block-device-and-loongarch/证据/single-root-compatibility.log:13: trailing whitespace.
++
+block-device-and-loongarch/证据/single-root-compatibility.log:13: new blank line at EOF.
+block-device-and-loongarch/证据/three-device-d1.log:29: trailing whitespace.
++
+block-device-and-loongarch/证据/three-device-d1.log:29: new blank line at EOF.
+Integrate B read-only ext2 backend on the VFS baseline
