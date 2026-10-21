@@ -7,6 +7,7 @@
 #include "defs.h"
 #include "vfs.h"
 #include "vfs_backend.h"
+#include "ext2.h"
 
 struct cpu cpus[NCPU];
 
@@ -518,6 +519,8 @@ forkret(void)
     fsinit(ROOTDEV);
     vfs_selftest();
     vfs_xv6_init();
+    // Device 2 is optional; keep the native root available when it is absent.
+    ext2_mount(2, "/mnt");
     // Root acquisition may sleep; p->lock was released above.
     if(vfs_xv6_root(&p->cwd) < 0)
       panic("init cwd");
