@@ -15,6 +15,8 @@
 
 ## 当前进展
 
+新增 LoongArch 页表、软件 TLB 重填和访问权限实验，以及连续对齐的物理内存分配。完整分页验证需要修复 QEMU 的 PNX 异常循环；机制、复现和范围见 [页表实验说明](block-device-and-loongarch/LoongArch页表实验-说明与复现.md)。这部分尚未接入完整内核。
+
 新增 LoongArch 物理页分配独立实验，按 4 KiB 管理预留的 1 MiB 内存；相关说明见 [平台实验](block-device-and-loongarch/loongarch-probe/README.md)。本轮不修改 RISC-V 内核，也不带入其他分支的文件系统代码。
 
 | 模块 | 状态 |

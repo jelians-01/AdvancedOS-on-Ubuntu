@@ -38,6 +38,33 @@ probe_page_alloc(void)
   return NULL;
 }
 
+void *
+probe_pages_alloc_aligned(size_t count, size_t alignment_pages)
+{
+  if (!count || count > page_count || !alignment_pages ||
+      alignment_pages > PROBE_MAX_PAGES ||
+      (alignment_pages & (alignment_pages - 1)))
+    return NULL;
+  for (size_t i = 0; i <= page_count - count; ++i) {
+    uintptr_t address = pool_begin + i * PROBE_PAGE_SIZE;
+    if (address % (alignment_pages * PROBE_PAGE_SIZE))
+      continue;
+    size_t j = 0;
+    while (j < count && !used[i + j])
+      ++j;
+    if (j != count)
+      continue;
+    for (j = 0; j < count; ++j)
+      used[i + j] = 1;
+    free_count -= count;
+    unsigned char *memory = (unsigned char *)address;
+    for (j = 0; j < count * PROBE_PAGE_SIZE; ++j)
+      memory[j] = 0;
+    return memory;
+  }
+  return NULL;
+}
+
 int
 probe_page_free(void *page)
 {

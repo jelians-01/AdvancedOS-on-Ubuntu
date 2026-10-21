@@ -23,6 +23,12 @@ context: build/context-probe.elf build/context-probe.dis
 
 memory: build/memory-probe.elf build/memory-probe.dis
 
+vm: build/vm-probe.elf build/vm-probe.dis
+
+host-vm: | build
+	$(HOST_CC) -std=c11 -O1 -g -Wall -Wextra -Werror -fno-omit-frame-pointer -fno-pie -no-pie -fsanitize=address,undefined page-allocator.c vm-table.c vm-host-test.c -o build/vm-host-test
+	./build/vm-host-test
+
 HOST_CC ?= cc
 host-memory: | build
 	$(HOST_CC) -std=c11 -O1 -g -Wall -Wextra -Werror -fno-omit-frame-pointer -fno-pie -no-pie -fsanitize=address,undefined page-allocator.c memory-test.c memory-host-test.c -o build/memory-host-test
@@ -112,7 +118,19 @@ build/memory-probe.elf: build/memory-entry.o build/memory-start.o build/page-all
 build/memory-probe.dis: build/memory-probe.elf
 	$(OBJDUMP) -d -S $< > $@
 
+build/vm-%.o: vm-%.c vm-table.h page-allocator.h | build
+	$(CC) $(CFLAGS) -Werror -c $< -o $@
+
+build/vm-%.o: vm-%.S | build
+	$(CC) $(CFLAGS) -Werror -c $< -o $@
+
+build/vm-probe.elf: build/vm-entry.o build/vm-vector.o build/vm-start.o build/vm-table.o build/page-allocator.o memory-linker.ld
+	$(CC) $(LDFLAGS) -Wl,-T,memory-linker.ld $(filter %.o,$^) -o $@
+
+build/vm-probe.dis: build/vm-probe.elf
+	$(OBJDUMP) -d -S $< > $@
+
 clean:
 	rm -rf build
 
-.PHONY: all exception timer return context memory host-memory build clean
+.PHONY: all exception timer return context memory host-memory vm host-vm build clean

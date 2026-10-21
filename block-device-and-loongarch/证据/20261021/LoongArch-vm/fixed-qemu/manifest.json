@@ -1,0 +1,188 @@
+{
+  "source_sha256": {
+    "context-entry.S": "ed324d1fded93a77f5254752a41e78a9c6225339aaecb9b461314b2de9326217",
+    "context-linker.ld": "ff52f946d46b7cda86ddf2ba38f6e4dbac0491af4af3c222a05c4d47248c2d3c",
+    "context-start.c": "c7719f1ffdbbe8c6ea5eeff811a7279f2dc1de1bcffa6c5972933a4ab985bbbc",
+    "context-switch.S": "4e1fdbc2d0408759f6e95239b9276dd63230b82772ac2153ec8e07b9889324aa",
+    "exception-linker.ld": "dc9a0916ccf18b48f5e2fc31a8fa5bde7f64dd4808d0c1da7756547dbc39e327",
+    "exception-start.c": "5dbbfb6b4b8a55909ebc631ff47b54559026784cd5a0bdffbc1543595ceb8cd9",
+    "exception-vector.S": "9aaff1932cda351d715ee739a23ebb3446d9ef07c506de1835a6c241c2776298",
+    "linker.ld": "255f1ee635150c24ce26ba301631b6620d66b5d9f93644f471cdcdb3760be538",
+    "Makefile": "63829da56b8f5e6b466284430dceec59c54440f32a244f72624dbfb8e9f2f28a",
+    "memory-entry.S": "f694b8cdc914a603f2df3900e43a45b49b9183550206b32d0ac0a1cefdabbe1d",
+    "memory-host-test.c": "93cc271da49b88b06ea543c33036fb0263fa9c9aed9471c566ce8dfa16c574f7",
+    "memory-linker.ld": "7706b81c2555863d02cb4d4a7ac8f38b2ad9091bfee27fcfbf4ad6b10425dacf",
+    "memory-start.c": "526d0c13f1c292576f7487d09bd20c94b87e061f2a3bb34364c1c586ca2ad980",
+    "memory-test.c": "8fe89f6be13a7bb37dc451d2fbfbc7ef4cff99a259b77f5a0b2acd7148874bfc",
+    "page-allocator.c": "94a1aba8d12a9ae226f801e8b98880a2cbf0ea51fab194c69909f8c10b289d6e",
+    "page-allocator.h": "f2c7c3e617e37886f286b951dcf32ef1a665ac927ee5aef9f5d5821ba397bff2",
+    "return-linker.ld": "df332aa0ea5fa1199feb6a4f090077a5b7062505be6d6ae4512f14ebd14069d4",
+    "return-start.c": "b0509113af1066b611d2303feea3e5047ef30bab9556e0c4bf493bf96d657054",
+    "return-vector.S": "72cd2c74111000d74575bbc409d1b7029692b6c5acc74ab0e23bccbd8565eff1",
+    "start.c": "4941e121f902953171f34829fab6a752b6f2b986e01a58922aee6d57de6d2991",
+    "timer-start.c": "d63d59239ed997f39a541eac6c810e38aedae228da1840ef5bf7b9374561d7cd",
+    "timer-vector.S": "a8ae7780dc85c231dafadee3dbc9837365ea9aa2719c563bd0b52e5854ea79f2",
+    "vm-entry.S": "5241bb641533146e207ce7de250263a68f91ca291aaaf00401fef9932febf0e8",
+    "vm-host-test.c": "1e1d094027b04ab57bfa0f0f38264c8ceeca8dda8fc555e4165b085d744f16d0",
+    "vm-start.c": "a45a52233823a9a3e9c30a185d9409cd4d2b72650d0aa6c8946584bea870a5d7",
+    "vm-table.c": "8d74202435e22f32c83eed4f2b6283d56208977b8a2ef2e2b47a6f574b8cc2b9",
+    "vm-table.h": "45c0798a56f24d3904e5502b1763d3015e5df38b1f557319b18b6060124d74ae",
+    "vm-vector.S": "be5a1c7cb5415429e0bc9137b23dafaa3c2fc12da2b49f3be618b019ee1c0d1b"
+  },
+  "results": [
+    {
+      "case": "memory-host",
+      "status": "PASS",
+      "command": [
+        "make",
+        "host-memory"
+      ]
+    },
+    {
+      "case": "vm-host",
+      "status": "PASS",
+      "command": [
+        "make",
+        "host-vm"
+      ]
+    },
+    {
+      "case": "all",
+      "status": "PASS",
+      "command": [
+        "/mnt/d/gpt_work/\u9ad8\u7ea7\u64cd\u4f5c\u7cfb\u7edf/tools/qemu-7.2.22-pnxfix-build/qemu-system-loongarch64",
+        "-machine",
+        "virt",
+        "-smp",
+        "1",
+        "-m",
+        "2G",
+        "-nographic",
+        "-nic",
+        "none",
+        "-kernel",
+        "build/loongarch-probe.elf"
+      ]
+    },
+    {
+      "case": "exception",
+      "status": "PASS",
+      "command": [
+        "/mnt/d/gpt_work/\u9ad8\u7ea7\u64cd\u4f5c\u7cfb\u7edf/tools/qemu-7.2.22-pnxfix-build/qemu-system-loongarch64",
+        "-machine",
+        "virt",
+        "-smp",
+        "1",
+        "-m",
+        "2G",
+        "-nographic",
+        "-nic",
+        "none",
+        "-kernel",
+        "build/exception-probe.elf"
+      ]
+    },
+    {
+      "case": "timer",
+      "status": "PASS",
+      "command": [
+        "/mnt/d/gpt_work/\u9ad8\u7ea7\u64cd\u4f5c\u7cfb\u7edf/tools/qemu-7.2.22-pnxfix-build/qemu-system-loongarch64",
+        "-machine",
+        "virt",
+        "-smp",
+        "1",
+        "-m",
+        "2G",
+        "-nographic",
+        "-nic",
+        "none",
+        "-kernel",
+        "build/timer-probe.elf"
+      ]
+    },
+    {
+      "case": "return",
+      "status": "PASS",
+      "command": [
+        "/mnt/d/gpt_work/\u9ad8\u7ea7\u64cd\u4f5c\u7cfb\u7edf/tools/qemu-7.2.22-pnxfix-build/qemu-system-loongarch64",
+        "-machine",
+        "virt",
+        "-smp",
+        "1",
+        "-m",
+        "2G",
+        "-nographic",
+        "-nic",
+        "none",
+        "-kernel",
+        "build/return-probe.elf"
+      ]
+    },
+    {
+      "case": "context",
+      "status": "PASS",
+      "command": [
+        "/mnt/d/gpt_work/\u9ad8\u7ea7\u64cd\u4f5c\u7cfb\u7edf/tools/qemu-7.2.22-pnxfix-build/qemu-system-loongarch64",
+        "-machine",
+        "virt",
+        "-smp",
+        "1",
+        "-m",
+        "2G",
+        "-nographic",
+        "-nic",
+        "none",
+        "-kernel",
+        "build/context-probe.elf"
+      ]
+    },
+    {
+      "case": "memory",
+      "status": "PASS",
+      "command": [
+        "/mnt/d/gpt_work/\u9ad8\u7ea7\u64cd\u4f5c\u7cfb\u7edf/tools/qemu-7.2.22-pnxfix-build/qemu-system-loongarch64",
+        "-machine",
+        "virt",
+        "-smp",
+        "1",
+        "-m",
+        "2G",
+        "-nographic",
+        "-nic",
+        "none",
+        "-kernel",
+        "build/memory-probe.elf"
+      ]
+    },
+    {
+      "case": "vm",
+      "status": "PASS",
+      "command": [
+        "/mnt/d/gpt_work/\u9ad8\u7ea7\u64cd\u4f5c\u7cfb\u7edf/tools/qemu-7.2.22-pnxfix-build/qemu-system-loongarch64",
+        "-machine",
+        "virt",
+        "-smp",
+        "1",
+        "-m",
+        "2G",
+        "-nographic",
+        "-nic",
+        "none",
+        "-kernel",
+        "build/vm-probe.elf",
+        "-d",
+        "int",
+        "-D",
+        "/mnt/d/gpt_work/\u9ad8\u7ea7\u64cd\u4f5c\u7cfb\u7edf/Git\u672c\u5730\u4ed3\u5e93-20261020/AdvancedOS-on-Ubuntu/block-device-and-loongarch/loongarch-probe/test-output/run-20261021-193513/vm-exceptions.log"
+      ]
+    }
+  ],
+  "compiler": "loongarch64-unknown-linux-gnu-gcc (GCC) 13.0.0 20220906 (experimental)",
+  "host_compiler": "cc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "qemu": "QEMU emulator version 7.2.22 (PNX-backport-db2325f)",
+  "qemu_sha256": "46de5ec299778e887cd4e42367cdf5aa895726fcd57a969083d46c687c0cc660",
+  "runner_sha256": "3faf17ada205d91debc6a34fc414ed9403e9fd7332d7c3b354b9261b522c6b3f",
+  "support_sha256": {
+    "apply_qemu_pnx_fix.py": "a8d3d867cd17736cc31df320f6e3810fd84d88825160e60097031faa7effb988"
+  }
+}
