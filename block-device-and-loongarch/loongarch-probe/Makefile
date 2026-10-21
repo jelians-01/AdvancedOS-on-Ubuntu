@@ -21,6 +21,13 @@ return: build/return-probe.elf build/return-probe.dis
 
 context: build/context-probe.elf build/context-probe.dis
 
+memory: build/memory-probe.elf build/memory-probe.dis
+
+HOST_CC ?= cc
+host-memory: | build
+	$(HOST_CC) -std=c11 -O1 -g -Wall -Wextra -Werror -fno-omit-frame-pointer -fno-pie -no-pie -fsanitize=address,undefined page-allocator.c memory-test.c memory-host-test.c -o build/memory-host-test
+	./build/memory-host-test
+
 build:
 	mkdir -p $@
 
@@ -87,7 +94,25 @@ build/context-probe.elf: build/context-start.o build/context-entry.o build/conte
 build/context-probe.dis: build/context-probe.elf
 	$(OBJDUMP) -d -S $< > $@
 
+build/memory-entry.o: memory-entry.S | build
+	$(CC) $(CFLAGS) -Werror -c $< -o $@
+
+build/memory-start.o: memory-start.c page-allocator.h | build
+	$(CC) $(CFLAGS) -Werror -c $< -o $@
+
+build/page-allocator.o: page-allocator.c page-allocator.h | build
+	$(CC) $(CFLAGS) -Werror -c $< -o $@
+
+build/memory-test.o: memory-test.c page-allocator.h | build
+	$(CC) $(CFLAGS) -Werror -c $< -o $@
+
+build/memory-probe.elf: build/memory-entry.o build/memory-start.o build/page-allocator.o build/memory-test.o memory-linker.ld
+	$(CC) $(LDFLAGS) -Wl,-T,memory-linker.ld $(filter %.o,$^) -o $@
+
+build/memory-probe.dis: build/memory-probe.elf
+	$(OBJDUMP) -d -S $< > $@
+
 clean:
 	rm -rf build
 
-.PHONY: all exception timer return context build clean
+.PHONY: all exception timer return context memory host-memory build clean

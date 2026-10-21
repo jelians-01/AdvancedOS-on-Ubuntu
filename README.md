@@ -15,6 +15,8 @@
 
 ## 当前进展
 
+新增 LoongArch 物理页分配独立实验，按 4 KiB 管理预留的 1 MiB 内存；相关说明见 [平台实验](block-device-and-loongarch/loongarch-probe/README.md)。本轮不修改 RISC-V 内核，也不带入其他分支的文件系统代码。
+
 | 模块 | 状态 |
 |---|---|
 | RISC-V 原生 xv6 | 可编译、启动，完整原版 `usertests` 通过 |

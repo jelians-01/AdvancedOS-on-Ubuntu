@@ -1,6 +1,6 @@
 # LoongArch 最小启动探查
 
-这是 C 成员为 LoongArch 阶段准备的独立构建探查，不是完整的 xv6 移植。它不修改 `xv6-riscv/`，因此不会影响已经通过验证的 RISC-V 多磁盘实现。
+这里保存 LoongArch 平台适配的独立实验，包括启动、异常、中断、上下文切换和物理页分配。它们尚未接入完整 xv6 内核。源码与 `xv6-riscv/` 分开维护。
 
 ## 已确认的环境
 
@@ -121,7 +121,26 @@ context: complete
 
 
 
-## 五类探查统一复现
+## 物理页分配实验
+
+`make memory` 构建 `build/memory-probe.elf`。链接脚本在程序数据和独立的 16 KiB 栈之后预留 1 MiB 内存，按 4 KiB 分成 256 页。预留区属于该 ELF 的内存段，并由链接断言检查不会超出 QEMU virt 的低地址 RAM，也不会覆盖程序栈。
+
+`page-allocator.c` 维护分配状态，提供初始化、分配、释放和剩余页数查询；分配时清零整页。初始化只接受完整、对齐、非空且不超过 256 页的区域，拒绝重复初始化；释放时拒绝空指针、越界地址、非页首地址及重复释放。
+
+```sh
+make memory
+qemu-system-loongarch64 -machine virt -smp 1 -m 2G -nographic \
+  -kernel build/memory-probe.elf
+make host-memory
+```
+
+两种运行都应输出 `memory: ALL PASS`。`host-memory` 用宿主编译器和 ASan/UBSan 运行同一份分配器及行为测试，要求宿主已安装支持这两个 sanitizer 的 C 编译器。
+
+测试覆盖：错误初始化、全部页的对齐/唯一性/清零、耗尽后返回空指针、各页数据互不覆盖、错误释放、重复释放、回收再分配时清零，以及八轮完整分配和归还。目标程序先关闭中断源并清零自身 BSS，在单 CPU 下执行；没有验证多 CPU 或中断并发安全。
+
+内存布局依据本次使用的 QEMU 7.2.22 源码：`hw/loongarch/virt.c` 将物理地址 0 起的 256 MiB 映射为 lowram，`include/hw/loongarch/virt.h` 定义 `VIRT_LOWMEM_SIZE=0x10000000`。实验沿用已有程序的 `0x9000000000200000` 入口地址，使用同一直接访问区域。当前未解析固件内存表，也未建立页表或接入 xv6 的 `kalloc`；这不是对所有 LoongArch 机器通用的内存布局约定。
+
+## 六类探查与宿主检查统一复现
 
 在 Ubuntu/WSL 运行，工具不在 PATH 时设置实际安装位置：
 
@@ -131,4 +150,4 @@ export LOONGARCH_QEMU=/your/qemu/bin/qemu-system-loongarch64
 python3 run_probes.py
 ```
 
-脚本在 test-output 中新建构建副本，分别验证启动/串口、异常入口、定时器、现场恢复与 ertn、独立上下文切换。程序验证后进入空闲循环，脚本按超时终止，并检查串口标记。原始输出和 manifest.json 保留在该次目录。
+脚本在 test-output 中新建构建副本，先运行分配器的宿主 sanitizer 检查，再分别验证启动/串口、异常入口、定时器、现场恢复与 ertn、独立上下文切换和物理页分配。目标程序验证后进入空闲循环，脚本按超时终止，并检查串口标记及显式失败信息。原始输出和 manifest.json（含源码、头文件及脚本校验值）保留在该次目录。
