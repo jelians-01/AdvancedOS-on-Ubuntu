@@ -1,0 +1,18 @@
+
+xv6 kernel is booting
+
+blkdev: dev=1 mmio=0x0000000010001000 sectors=4000 ro=0 flush=1
+blkdev: dev=2 mmio=0x0000000010002000 sectors=65536 ro=0 flush=1
+hart 1 starting
+hart 2 starting
+vfs instances: ALL TESTS PASSED
+vfs paths: ALL TESTS PASSED
+vfs mounts: ALL TESTS PASSED
+init: starting sh
+$ ext2write verify
+ext2write: PERSISTENCE PASSED
+$ ext2single verify
+ext2single: PERSISTENCE PASSED
+$ ext2test
+ext2test: ALL TESTS PASSED
+$ qemu-system-riscv64: terminating on signal 15 from pid 367 (python3)

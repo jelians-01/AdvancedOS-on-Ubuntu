@@ -158,10 +158,13 @@ main(int argc, char **argv)
   close(create("/mnt/b-empty"));
 
   fd = create("/mnt/b-limit");
-  if(write(fd, payload, 12289) != -1) fail("oversize rejected before progress");
+  if(write(fd, payload, 12289) != 12289) fail("first indirect byte");
+  close(fd);
+  check("/mnt/b-limit", payload, 12289);
+  fd = create("/mnt/b-limit");
   struct stat st;
-  if(fstat(fd, &st) < 0 || st.size != 0) fail("oversize changed file");
-  if(write(fd, payload, 12288) != 12288 || write(fd, payload, 1) != -1)
+  if(fstat(fd, &st) < 0 || st.size != 0) fail("indirect truncate size");
+  if(write(fd, payload, 12288) != 12288)
     fail("direct-block boundary");
   close(fd);
 
@@ -170,10 +173,10 @@ main(int argc, char **argv)
     fail("bad pointer accepted");
   if(fstat(fd, &st) < 0 || st.size != 0) fail("bad pointer changed size");
   close(fd);
-  if(open("/mnt/indirect.bin", O_WRONLY | O_TRUNC) != -1)
-    fail("indirect truncate accepted");
-  fd = open("/mnt/indirect.bin", O_WRONLY);
-  if(fd < 0 || write(fd, payload, 1) != -1) fail("indirect write accepted");
+  if(open("/mnt/double.bin", O_WRONLY | O_TRUNC) != -1)
+    fail("double indirect truncate accepted");
+  fd = open("/mnt/double.bin", O_WRONLY);
+  if(fd < 0 || write(fd, payload, 1) != -1) fail("double indirect write accepted");
   close(fd);
   if(open("/mnt/lost+found/new", O_CREATE | O_WRONLY) != -1)
     fail("subdirectory creation accepted");

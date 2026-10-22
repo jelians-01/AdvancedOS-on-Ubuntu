@@ -625,8 +625,10 @@ ext2_write_state(struct ext2_fs *fs, int clean)
     return -1;
   }
   sb = kalloc();
-  if(sb == 0)
+  if(sb == 0){
+    fs->write_failed = 1;
     return -1;
+  }
   if(ext2_read_bytes(fs, EXT2_SUPER_OFFSET, sb, EXT2_SUPER_SIZE) == 0){
     put16(sb + 58, clean ? 1 : 0);
     r = ext2_write_bytes(fs, EXT2_SUPER_OFFSET, sb, EXT2_SUPER_SIZE);
@@ -740,10 +742,12 @@ static int
 ext2_simple_file(struct ext2_inode *ip)
 {
   uint sectors = 0;
+  uchar *indirect = 0;
+  uint n = ip->fs->block_size / 4;
   if((ip->mode & EXT2_S_IFMT) != EXT2_S_IFREG || ip->links == 0 ||
      ip->flags || ip->file_acl || ip->size_hi ||
-     ip->size_lo > EXT2_NDIR_BLOCKS * ip->fs->block_size ||
-     ip->blocks[12] || ip->blocks[13] || ip->blocks[14])
+     ip->size_lo > (EXT2_NDIR_BLOCKS + n) * ip->fs->block_size ||
+     ip->blocks[13] || ip->blocks[14])
     return 0;
   for(int i = 0; i < EXT2_NDIR_BLOCKS; i++){
     if(ip->blocks[i]){
@@ -756,7 +760,38 @@ ext2_simple_file(struct ext2_inode *ip)
       sectors += ip->fs->block_size / 512;
     }
   }
+  if(ip->blocks[12]){
+    if(ip->blocks[12] < ip->fs->first_data_block ||
+       ip->blocks[12] >= ip->fs->blocks_count)
+      return 0;
+    for(int i = 0; i < EXT2_NDIR_BLOCKS; i++)
+      if(ip->blocks[i] == ip->blocks[12])
+        return 0;
+    indirect = kalloc();
+    if(indirect == 0 || ext2_read_block(ip->fs, ip->blocks[12], indirect) < 0){
+      if(indirect) kfree(indirect);
+      return 0;
+    }
+    sectors += ip->fs->block_size / 512;
+    for(uint i = 0; i < n; i++){
+      uint block = get32(indirect + 4 * i);
+      if(block == 0)
+        continue;
+      if(block < ip->fs->first_data_block || block >= ip->fs->blocks_count ||
+         block == ip->blocks[12])
+        goto bad;
+      for(int j = 0; j < EXT2_NDIR_BLOCKS; j++)
+        if(block == ip->blocks[j]) goto bad;
+      for(uint j = 0; j < i; j++)
+        if(block == get32(indirect + 4 * j)) goto bad;
+      sectors += ip->fs->block_size / 512;
+    }
+    kfree(indirect);
+  }
   return sectors == ip->sectors;
+bad:
+  kfree(indirect);
+  return 0;
 }
 
 static int
@@ -765,7 +800,11 @@ ext2_write_at(void *data, int user_src, uint64 src, uint off, uint n)
   struct ext2_inode *ip = data;
   struct ext2_fs *fs = ip->fs;
   uchar *buf = 0, *raw = 0;
-  uint total = 0, max = EXT2_NDIR_BLOCKS * fs->block_size;
+  uint nindirect = fs->block_size / 4;
+  // The write boundary follows the number of data pointers, not including
+  // the single indirect metadata block itself.
+  uint total = 0, max = (EXT2_NDIR_BLOCKS + nindirect) * fs->block_size;
+  uchar *indirect = 0;
   int r = -1, started = 0;
 
   acquiresleep(&fs->write_lock);
@@ -782,7 +821,25 @@ ext2_write_at(void *data, int user_src, uint64 src, uint off, uint n)
   while(total < n){
     uint pos = off + total, logical = pos / fs->block_size;
     uint within = pos % fs->block_size, take = fs->block_size - within;
-    uint block = ip->blocks[logical];
+    uint block, new_table = 0;
+    uint indirect_index = 0;
+    if(logical < EXT2_NDIR_BLOCKS)
+      block = ip->blocks[logical];
+    else {
+      indirect_index = logical - EXT2_NDIR_BLOCKS;
+      if(indirect_index >= nindirect)
+        break;
+      if(indirect == 0){
+        indirect = kalloc();
+        if(indirect == 0) break;
+        if(ip->blocks[12]){
+          if(ext2_read_block(fs, ip->blocks[12], indirect) < 0) break;
+        } else {
+          memset(indirect, 0, fs->block_size);
+        }
+      }
+      block = get32(indirect + indirect_index * 4);
+    }
     int fresh = block == 0;
     if(take > n - total) take = n - total;
     if(fresh)
@@ -801,11 +858,33 @@ ext2_write_at(void *data, int user_src, uint64 src, uint off, uint n)
         if(ar < 0) fs->write_failed = 1;
         break;
       }
+      if(logical >= EXT2_NDIR_BLOCKS && ip->blocks[12] == 0){
+        // Reserve the index block before publishing either new reference.
+        ar = ext2_bitmap(fs, 0, &new_table, 1);
+        if(ar != 0){
+          // Neither reservation has been published in the inode. If only
+          // one block remained, release it and leave the file unchanged.
+          if(ar < 0 || ext2_bitmap(fs, 0, &block, 0) != 0)
+            fs->write_failed = 1;
+          break;
+        }
+      }
     }
     if(ext2_write_block(fs, block, buf) < 0)
       break;
     if(fresh){
-      ip->blocks[logical] = block;
+      if(logical < EXT2_NDIR_BLOCKS)
+        ip->blocks[logical] = block;
+      else {
+        put32(indirect + indirect_index * 4, block);
+        uint table = new_table ? new_table : ip->blocks[12];
+        if(ext2_write_block(fs, table, indirect) < 0)
+          break;
+        if(new_table){
+          ip->blocks[12] = new_table;
+          ip->sectors += fs->block_size / 512;
+        }
+      }
       ip->sectors += fs->block_size / 512;
     }
     if(pos + take > ip->size_lo)
@@ -822,6 +901,7 @@ done:
     r = -1;
   if(buf) kfree(buf);
   if(raw) kfree(raw);
+  if(indirect) kfree(indirect);
   releasesleep(&ip->lock);
   releasesleep(&fs->write_lock);
   return r;
@@ -832,7 +912,7 @@ ext2_truncate_zero(void *data)
 {
   struct ext2_inode *ip = data;
   struct ext2_fs *fs = ip->fs;
-  uchar *raw;
+  uchar *raw, *indirect = 0;
   int r = -1, started = 0;
   acquiresleep(&fs->write_lock);
   acquiresleep(&ip->lock);
@@ -842,6 +922,13 @@ ext2_truncate_zero(void *data)
      ext2_write_state(fs, 0) < 0)
     goto done;
   started = 1;
+  if(ip->blocks[12]){
+    indirect = kalloc();
+    if(indirect == 0 || ext2_read_block(fs, ip->blocks[12], indirect) < 0){
+      fs->write_failed = 1;
+      goto done;
+    }
+  }
   ip->size_lo = 0;
   for(int i = 0; i < EXT2_NDIR_BLOCKS; i++){
     uint block = ip->blocks[i];
@@ -854,11 +941,35 @@ ext2_truncate_zero(void *data)
       goto done;
     }
   }
+  if(ip->blocks[12]){
+    uint table = ip->blocks[12];
+    for(uint i = 0; i < fs->block_size / 4; i++){
+      uint block = get32(indirect + i * 4);
+      if(block == 0) continue;
+      put32(indirect + i * 4, 0);
+      if(ext2_write_block(fs, table, indirect) < 0){
+        fs->write_failed = 1;
+        goto done;
+      }
+      ip->sectors -= fs->block_size / 512;
+      if(ext2_store_inode(ip, raw) < 0 || ext2_bitmap(fs, 0, &block, 0) != 0){
+        fs->write_failed = 1;
+        goto done;
+      }
+    }
+    ip->blocks[12] = 0;
+    ip->sectors -= fs->block_size / 512;
+    if(ext2_store_inode(ip, raw) < 0 || ext2_bitmap(fs, 0, &table, 0) != 0){
+      fs->write_failed = 1;
+      goto done;
+    }
+  }
   r = ext2_store_inode(ip, raw);
   if(r < 0) fs->write_failed = 1;
 done:
   if(started && ext2_write_state(fs, 1) < 0) r = -1;
   if(raw) kfree(raw);
+  if(indirect) kfree(indirect);
   releasesleep(&ip->lock);
   releasesleep(&fs->write_lock);
   return r;

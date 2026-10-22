@@ -1,0 +1,58 @@
+{
+  "format": "ext2,32MiB,1KiB blocks,128-byte inodes,-O none",
+  "cpu_count": 3,
+  "machine": "virt",
+  "cache": "writeback",
+  "kernel_sha256": "bd5193c6e6e0bc4120efb2f080372b897cf688422746de11a17d79f39c2c72b4",
+  "initial_image_sha256": "630f46c9157288593bb3c365e60c31e750c1ae001e409673bdc69c746744fc43",
+  "initial_super_free": [
+    31423,
+    8177
+  ],
+  "results": [
+    "write and native targeted regression: PASS",
+    "same-image reboot readback: PASS",
+    "readonly device refusal and unchanged hash: PASS",
+    "blocks exhaustion/retry: PASS",
+    "inodes exhaustion/retry: PASS",
+    "directory exhaustion/retry: PASS",
+    "indirect transition with zero free blocks: PASS",
+    "indirect transition with one free blocks: PASS",
+    "e2fsck -fn: PASS",
+    "all host byte comparisons: PASS",
+    "exact allocation/reclamation counters: PASS",
+    "blocks fsck and exact counters: PASS",
+    "inodes fsck and exact counters: PASS",
+    "directory fsck and exact counters: PASS",
+    "zero transition fsck/bytes/counters: PASS",
+    "one transition fsck/bytes/counters: PASS"
+  ],
+  "edge_initial_free": {
+    "blocks": [
+      102,
+      53
+    ],
+    "inodes": [
+      108,
+      5
+    ],
+    "directory": [
+      102,
+      53
+    ],
+    "zero": [
+      102,
+      53
+    ],
+    "one": [
+      102,
+      53
+    ]
+  },
+  "qemu": "QEMU emulator version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)",
+  "final_image_sha256": "a7a5481c3fc3c602ecc4ed56dd41c86618b1e9b81acb57484515dde2f9c5a5e0",
+  "final_super_free": [
+    31087,
+    8166
+  ]
+}

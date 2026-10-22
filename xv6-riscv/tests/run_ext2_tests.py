@@ -48,7 +48,8 @@ def prepare(out):
     command(['mke2fs', '-t', 'ext2', '-F', '-b', '1024', '-I', '128', '-O', 'none', image], log)
     fixtures = {'hello.txt': b'hello from ext2\n',
                 'multi.bin': bytes(i % 251 for i in range(3073)),
-                'indirect.bin': bytes(i % 251 for i in range(13000))}
+                'indirect.bin': bytes(i % 251 for i in range(13000)),
+                'double.bin': bytes(i % 251 for i in range(274433))}
     for name, data in fixtures.items():
         host = out / name
         host.write_bytes(data)
@@ -61,7 +62,7 @@ def prepare(out):
                 'initial_super_free': super_free(image),
                 'results': []}
     manifest['edge_initial_free'] = {}
-    for kind in ('blocks', 'inodes', 'directory'):
+    for kind in ('blocks', 'inodes', 'directory', 'zero', 'one'):
         edge = out / f'{kind}.img'
         with edge.open('wb') as f:
             f.truncate(128 * 1024)
@@ -69,6 +70,8 @@ def prepare(out):
                  '-O', 'none', '-m', '0', '-N', '16' if kind == 'inodes' else '64', edge], log)
         command(['e2fsck', '-fn', edge], log)
         manifest['edge_initial_free'][kind] = super_free(edge)
+        if kind in ('zero', 'one'):
+            assert super_free(edge) == [102, 53], 'transition fixture geometry changed'
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=2))
 
 
@@ -120,7 +123,7 @@ def guest(out, name, commands, readonly=False, image='ext2.img'):
             for cmd, expected in commands:
                 p.stdin.write(cmd.encode() + b'\n')
                 p.stdin.flush()
-                output = until_prompt(120)
+                output = until_prompt(300 if cmd == 'ext2single' else 120)
                 if expected.encode() not in output:
                     raise RuntimeError(f'{cmd} failed: {output.decode(errors="replace")}')
                 print(f'{name}: {cmd}: PASS', flush=True)
@@ -144,6 +147,7 @@ def run(out):
         [os.environ.get('XV6_QEMU', 'qemu-system-riscv64'), '--version'], text=True).splitlines()[0]
     guest(out, 'write', [('ext2test', 'ext2test: ALL TESTS PASSED'),
                          ('ext2write', 'ext2write: ALL TESTS PASSED'),
+                         ('ext2single', 'ext2single: ALL TESTS PASSED'),
                          ('ext2test', 'ext2test: ALL TESTS PASSED'),
                          ('usertests copyin', 'ALL TESTS PASSED'),
                          ('usertests truncate2', 'ALL TESTS PASSED'),
@@ -151,12 +155,14 @@ def run(out):
     written_hash = digest(out / 'ext2.img')
     manifest['results'].append('write and native targeted regression: PASS')
     guest(out, 'reboot', [('ext2write verify', 'ext2write: PERSISTENCE PASSED'),
+                          ('ext2single verify', 'ext2single: PERSISTENCE PASSED'),
                           ('ext2test', 'ext2test: ALL TESTS PASSED')])
     assert digest(out / 'ext2.img') == written_hash, 'reboot verification changed data image'
     manifest['results'].append('same-image reboot readback: PASS')
     guest(out, 'readonly', [('ext2test', 'ext2test: ALL TESTS PASSED'),
                             ('echo forbidden > /mnt/b-copy.bin', 'open /mnt/b-copy.bin failed'),
-                            ('ext2write verify', 'ext2write: PERSISTENCE PASSED')], readonly=True)
+                            ('ext2write verify', 'ext2write: PERSISTENCE PASSED'),
+                            ('ext2single verify', 'ext2single: PERSISTENCE PASSED')], readonly=True)
     assert digest(out / 'ext2.img') == written_hash, 'readonly disk changed'
     manifest['results'].append('readonly device refusal and unchanged hash: PASS')
     manifest['final_image_sha256'] = written_hash
@@ -164,17 +170,24 @@ def run(out):
         guest(out, kind, [(f'ext2write {kind}', f'ext2write: SPACE {kind} PASSED')],
               image=f'{kind}.img')
         manifest['results'].append(f'{kind} exhaustion/retry: PASS')
+    for kind in ('zero', 'one'):
+        guest(out, kind, [(f'ext2single {kind}', 'ext2single: TRANSITION PASSED')],
+              image=f'{kind}.img')
+        manifest['results'].append(f'indirect transition with {kind} free blocks: PASS')
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=2))
 
 
 def check(out):
     log = out / 'check.log'
     command(['e2fsck', '-fn', out / 'ext2.img'], log)
-    payload = bytes(i % 251 for i in range(12288))
+    payload = bytes(i % 251 for i in range(274433))
     expected = {'b-copy.bin': payload[:3073], 'b-empty': b'', 'b-short': b'short\n',
-                'b-limit': payload, 'b-overwrite': b'XYZ' + payload[3:3073], 'b-badptr': b'',
+                'b-limit': payload[:12288], 'b-overwrite': b'XYZ' + payload[3:3073], 'b-badptr': b'',
                 'hello.txt': b'hello from ext2\n', 'multi.bin': payload[:3073],
-                'indirect.bin': bytes(i % 251 for i in range(13000))}
+                'indirect.bin': payload[:13000], 'double.bin': payload,
+                's-max': payload[:274432], 's-copy': payload[:30001],
+                's-empty': b'', 's-short': payload[:6],
+                's-edge': payload[:12285] + b'BOUNDARY'}
     for name, data in expected.items():
         target = out / f'export-{name}'
         command(['debugfs', '-R', f'dump /{name} {target}', out / 'ext2.img'], log)
@@ -182,8 +195,9 @@ def check(out):
     manifest = json.loads((out / 'manifest.json').read_text())
     before = manifest['initial_super_free']
     after = super_free(out / 'ext2.img')
-    # 4 copy + 4 overwrite + 1 short + 12 limit blocks; six new inodes.
-    assert before[0] - after[0] == 21 and before[1] - after[1] == 6, (before, after)
+    # Previous 21 blocks + (269 max + 31 copy + 1 short + 14 edge).
+    # Includes index blocks. Rewritten imported inode has no net change.
+    assert before[0] - after[0] == 336 and before[1] - after[1] == 11, (before, after)
     manifest['final_super_free'] = after
     manifest['results'] += ['e2fsck -fn: PASS', 'all host byte comparisons: PASS',
                             'exact allocation/reclamation counters: PASS']
@@ -202,6 +216,22 @@ def check(out):
             if kind == 'inodes':
                 assert after_edge[1] == 0
         manifest['results'].append(f'{kind} fsck and exact counters: PASS')
+    for kind in ('zero', 'one'):
+        edge = out / f'{kind}.img'
+        command(['e2fsck', '-fn', edge], log)
+        before_edge = manifest['edge_initial_free'][kind]
+        after_edge = super_free(edge)
+        # Target: 13 data + 1 index; filler is fully truncated. The one-block
+        # case also consumes that last returned block in /last.
+        extra = int(kind == 'one')
+        assert before_edge[0] - after_edge[0] == 14 + extra
+        assert before_edge[1] - after_edge[1] == 2 + extra
+        for name, data in {'target': payload[:12289], 'filler': b'',
+                           **({'last': payload[:1024]} if extra else {})}.items():
+            target = out / f'export-{kind}-{name}'
+            command(['debugfs', '-R', f'dump /{name} {target}', edge], log)
+            assert target.read_bytes() == data
+        manifest['results'].append(f'{kind} transition fsck/bytes/counters: PASS')
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=2))
     print('EXT2 WRITE TEST MATRIX PASSED', flush=True)
 

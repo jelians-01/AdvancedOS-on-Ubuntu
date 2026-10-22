@@ -154,6 +154,7 @@ UPROGS=\
 	$U/_vfsdir\
 	$U/_ext2test\
 	$U/_ext2write\
+	$U/_ext2single\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
