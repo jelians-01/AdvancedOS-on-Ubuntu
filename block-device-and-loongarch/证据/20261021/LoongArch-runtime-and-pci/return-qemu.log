@@ -1,0 +1,3 @@
+trap return: before syscall
+R
+trap return: after ertn

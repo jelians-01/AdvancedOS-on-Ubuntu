@@ -1,0 +1,53 @@
+
+Elf file type is EXEC (Executable file)
+Entry point 0x9000000000200000
+There are 2 program headers, starting at offset 64
+
+Program Headers:
+  Type           Offset   VirtAddr           PhysAddr           FileSiz  MemSiz   Flg Align
+  LOAD           0x004000 0x9000000000200000 0x9000000000200000 0x001945 0x001945 R E 0x4000
+  LOAD           0x005950 0x9000000000201950 0x9000000000201950 0x000008 0x10e6b0 RW  0x4000
+
+ Section to Segment mapping:
+  Segment Sections...
+   00     .text .rodata 
+   01     .data .bss 
+
+Symbol table '.symtab' contains 36 entries:
+   Num:    Value          Size Type    Bind   Vis      Ndx Name
+     0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND 
+     1: 9000000000200000     0 SECTION LOCAL  DEFAULT    1 .text
+     2: 9000000000201640     0 SECTION LOCAL  DEFAULT    2 .rodata
+     3: 9000000000201950     0 SECTION LOCAL  DEFAULT    3 .data
+     4: 9000000000202000     0 SECTION LOCAL  DEFAULT    4 .bss
+     5: 0000000000000000     0 FILE    LOCAL  DEFAULT  ABS pci-block.c
+     6: 9000000000200050   552 FUNC    LOCAL  DEFAULT    1 submit
+     7: 9000000000200278   452 FUNC    LOCAL  DEFAULT    1 transfer
+     8: 9000000000203000 36864 OBJECT  LOCAL  DEFAULT    4 rings
+     9: 9000000000201950     8 OBJECT  LOCAL  DEFAULT    3 next_mmio
+    10: 9000000000202000     4 OBJECT  LOCAL  DEFAULT    4 count
+    11: 9000000000202010  1920 OBJECT  LOCAL  DEFAULT    4 disks
+    12: 9000000000202790     4 OBJECT  LOCAL  DEFAULT    4 initialized
+    13: 0000000000000000     0 FILE    LOCAL  DEFAULT  ABS disk-test.c
+    14: 9000000000200f60    88 FUNC    LOCAL  DEFAULT    1 report
+    15: 9000000000200fb8   100 FUNC    LOCAL  DEFAULT    1 hex
+    16: 900000000020101c    68 FUNC    LOCAL  DEFAULT    1 stop
+    17: 9000000000201930    21 OBJECT  LOCAL  DEFAULT    2 marker
+    18: 0000000000000000     0 FILE    LOCAL  DEFAULT  ABS probe-mem.c
+    19: 9000000000310000     0 NOTYPE  GLOBAL DEFAULT    4 memory_pool_end
+    20: 9000000000201060  1464 FUNC    GLOBAL DEFAULT    1 disk_main
+    21: 9000000000200e68    92 FUNC    GLOBAL DEFAULT    1 blk_flush
+    22: 9000000000210000     0 NOTYPE  GLOBAL DEFAULT    4 memory_pool_begin
+    23: 9000000000200f18    72 FUNC    GLOBAL DEFAULT    1 pci_block_readonly
+    24: 900000000020043c  2504 FUNC    GLOBAL DEFAULT    1 blk_init
+    25: 9000000000200e0c     8 FUNC    GLOBAL DEFAULT    1 blk_write
+    26: 9000000000202000     0 NOTYPE  GLOBAL DEFAULT    4 memory_bss_begin
+    27: 9000000000200ec4    12 FUNC    GLOBAL DEFAULT    1 pci_block_count
+    28: 9000000000200000     0 NOTYPE  GLOBAL DEFAULT    1 _start
+    29: 9000000000201618    32 FUNC    GLOBAL DEFAULT    1 memset
+    30: 9000000000200ed0    72 FUNC    GLOBAL DEFAULT    1 pci_block_modern
+    31: 9000000000200e14    84 FUNC    GLOBAL DEFAULT    1 blk_size
+    32: 9000000000200e04     8 FUNC    GLOBAL DEFAULT    1 blk_read
+    33: 900000000020c000     0 NOTYPE  GLOBAL DEFAULT    4 memory_bss_end
+    34: 9000000000210000     0 NOTYPE  GLOBAL DEFAULT    4 memory_stack_top
+    35: 900000000020c000     0 NOTYPE  GLOBAL DEFAULT    4 memory_stack_bottom

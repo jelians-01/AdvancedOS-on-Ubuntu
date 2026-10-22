@@ -1,0 +1,6 @@
+mkdir -p build
+cc -std=c11 -O1 -g -Wall -Wextra -Werror -fno-omit-frame-pointer -fno-pie -no-pie -fsanitize=address,undefined page-allocator.c vm-table.c user-copy.c user-copy-host-test.c -o build/user-copy-host-test
+./build/user-copy-host-test
+user-copy: cross-page input/output PASS
+user-copy: permissions overflow and no partial copies PASS
+user-copy: ALL PASS

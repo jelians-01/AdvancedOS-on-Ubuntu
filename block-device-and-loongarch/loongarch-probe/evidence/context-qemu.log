@@ -1,0 +1,6 @@
+context: main
+context: worker
+context: main resumed
+context: worker resumed
+context: complete
+qemu-system-loongarch64: terminating on signal 15 from pid 676 (/usr/bin/timeout)

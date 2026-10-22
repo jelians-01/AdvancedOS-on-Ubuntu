@@ -1,0 +1,2 @@
+disk: begin (PCI VirtIO, synchronous D1)
+disk: no device handled PASS
