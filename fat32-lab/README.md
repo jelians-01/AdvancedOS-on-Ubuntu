@@ -56,7 +56,7 @@ make clean test
 
 ## xv6 VFS 集成测试
 
-`xv6-riscv/tests/run_fat32_vfs_tests.py` 会准备一次性 FAT32 测试卷，将其作为设备 3 以只读方式连接到 QEMU，并运行 `fat32test`、VFS 目录测试和 `usertests copyin`。检查阶段核对镜像 SHA-256、`fsck.fat -n` 和宿主端文件读回。输出路径必须是不存在的新目录，例如：
+`xv6-riscv/tests/run_fat32_vfs_tests.py` 会准备一次性 FAT32 测试卷，将其作为设备 3 以只读方式连接到 QEMU，并运行 `fat32test`、VFS 目录测试和 `usertests copyin`。另外会测试 FAT32 引导签名损坏和设备 3 缺失两种情况，确认 xv6 保留原生根文件系统且不挂载 `/fat`。检查阶段核对镜像 SHA-256、`fsck.fat -n` 和宿主端文件读回。输出路径必须是不存在的新目录，例如：
 
 ```sh
 cd xv6-riscv
@@ -65,4 +65,4 @@ python3 tests/run_fat32_vfs_tests.py run /tmp/fat32-vfs-test
 python3 tests/run_fat32_vfs_tests.py check /tmp/fat32-vfs-test
 ```
 
-执行前需要编译 `kernel/kernel` 与 `fs.img`；`prepare` 和 `check` 需要 `mkfs.fat`、`fsck.fat`，QEMU 测试需要支持 `virt` 的 `qemu-system-riscv64`。本地实现范围仍是只读的 FAT32 原始卷（卷从设备字节偏移 0 开始）和 8.3 短文件名。后续可补充畸形内核卷、不同扇区/簇大小的边界测试，再决定是否实现 VFAT 长文件名。
+执行前需要编译 `kernel/kernel` 与 `fs.img`；`prepare` 和 `check` 需要 `mkfs.fat`、`fsck.fat`，QEMU 测试需要支持 `virt` 的 `qemu-system-riscv64`。脚本对每次启动使用独立的原生根盘副本，避免不同场景互相影响。当前已覆盖引导签名损坏和设备缺失；后续可补充其它错误 BPB/FAT 表项及不同扇区/簇大小的内核边界测试，再决定是否实现 VFAT 长文件名。

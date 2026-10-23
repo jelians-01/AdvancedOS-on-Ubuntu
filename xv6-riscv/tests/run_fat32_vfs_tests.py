@@ -54,26 +54,36 @@ def prepare(out):
     command(["python3", str(FATLAB / "test_fat32.py"), str(reader), mkfs,
              "--keep-image", str(out / "fat32.img")], log=out / "prepare.log")
     (out / "fat32.sha256").write_text(digest(out / "fat32.img") + "\n")
+    bad = out / "fat32-bad-signature.img"
+    shutil.copyfile(out / "fat32.img", bad)
+    with bad.open("r+b") as stream:
+        stream.seek(510)
+        stream.write(b"\x00")
+    (out / "fat32-bad-signature.sha256").write_text(digest(bad) + "\n")
     print(f"Prepared FAT32 fixture: {out / 'fat32.img'}", flush=True)
 
 
-def guest(out, commands):
+def guest(out, commands, *, fat_image="fat32.img", log_name="qemu.log"):
     qemu = os.environ.get("XV6_QEMU", "qemu-system-riscv64")
+    root_image = out / f"root-{Path(log_name).stem}.img"
+    shutil.copyfile(out / "fs.img", root_image)
     args = [qemu, "-machine", "virt", "-bios", "none", "-kernel",
             str(out / "kernel"), "-m", "128M", "-smp", "3", "-display",
             "none", "-serial", "stdio", "-monitor", "none", "-global",
             "virtio-mmio.force-legacy=false",
-            "-drive", f"file={out / 'fs.img'},if=none,format=raw,id=d0",
+            "-drive", f"file={root_image},if=none,format=raw,id=d0",
             "-device", "virtio-blk-device,drive=d0,bus=virtio-mmio-bus.0",
-            "-drive", f"file={out / 'fat32.img'},if=none,format=raw,id=d2,cache=writeback,readonly=on",
-            "-device", "virtio-blk-device,drive=d2,bus=virtio-mmio-bus.2"]
+            ]
+    if fat_image is not None:
+        args += ["-drive", f"file={out / fat_image},if=none,format=raw,id=d2,cache=writeback,readonly=on",
+                 "-device", "virtio-blk-device,drive=d2,bus=virtio-mmio-bus.2"]
     process = subprocess.Popen(args, stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
     transcript = bytearray()
     cursor = 0
-    log_path = out / "qemu.log"
+    log_path = out / log_name
     with log_path.open("wb") as log:
         def until_prompt(timeout):
             nonlocal cursor
@@ -120,6 +130,10 @@ def run(out):
     guest(out, [("fat32test", "fat32test: ALL TESTS PASSED"),
                 ("vfsdir", "vfsdir: ALL TESTS PASSED"),
                 ("usertests copyin", "ALL TESTS PASSED")])
+    guest(out, [("fat32missing", "fat32missing: PASS")],
+          fat_image="fat32-bad-signature.img", log_name="qemu-bad-signature.log")
+    guest(out, [("fat32missing", "fat32missing: PASS")],
+          fat_image=None, log_name="qemu-no-fat-disk.log")
 
 
 def check(out):
@@ -127,6 +141,9 @@ def check(out):
     actual = digest(out / "fat32.img")
     if actual != expected:
         raise AssertionError("FAT32 read-only guest changed the fixture image")
+    bad_expected = (out / "fat32-bad-signature.sha256").read_text().strip()
+    if digest(out / "fat32-bad-signature.img") != bad_expected:
+        raise AssertionError("invalid FAT32 fixture unexpectedly changed")
     command(["fsck.fat", "-n", str(out / "fat32.img")], log=out / "check.log")
     command([str(FATLAB / "build/fat32_reader"), str(out / "fat32.img"),
              "cat", "/HELLO.TXT"], log=out / "check.log")

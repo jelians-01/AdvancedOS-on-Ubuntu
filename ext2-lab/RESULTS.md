@@ -13,6 +13,8 @@
 
 | 本次验证 | 结果 |
 |---|---|
+| FAT32 有效卷：根/嵌套目录、碎片簇链、只读拒绝；FAT32 宿主及文件系统一致性 | 全部通过 |
+| FAT32 设备 3 缺失、引导签名损坏：原生根可用且不挂载 `/fat` | 通过 |
 | Ubuntu 22.04 RISC-V 强制重编译内核与 `fs.img` | 通过 |
 | Ubuntu 24.04 / QEMU 8.2.2：`fat32test`、`vfsdir`、`usertests copyin` | 全部通过 |
 | FAT32 写入、截断、新建操作拒绝；测试后原文件仍可完整读取 | 通过 |
@@ -21,9 +23,9 @@
 | ext2 主测试卷及空间/目录边界镜像的 `e2fsck -fn`、逐字节数据和精确计数 | 全部通过 |
 | FAT32 宿主解析器 `make clean test` | 通过 |
 
-运行环境分开使用 Ubuntu 22.04 的 RISC-V 工具链和 FAT 检查工具、Ubuntu 24.04 的 QEMU 8.2.2；RISC-V `virt`、3 核、128 MiB 内存。可复现脚本为 `xv6-riscv/tests/run_fat32_vfs_tests.py`；本地镜像和日志在 `xv6-riscv/test-output/fat32-vfs-integration-2026-10-23-rotest/`，Git 已忽略这些生成文件。ext2 回归脚本为 `xv6-riscv/tests/run_ext2_tests.py`，输出在 `xv6-riscv/test-output/ext2-regression-2026-10-23/`。
+运行环境分开使用 Ubuntu 22.04 的 RISC-V 工具链和 FAT 检查工具、Ubuntu 24.04 的 QEMU 8.2.2；RISC-V `virt`、3 核、128 MiB 内存。可复现脚本为 `xv6-riscv/tests/run_fat32_vfs_tests.py`；有效 FAT32 卷测试输出在 `xv6-riscv/test-output/fat32-failmount-2026-10-23-retest/`，包含有效卷、坏引导签名和设备缺失三种启动日志。Git 已忽略这些生成文件。ext2 回归脚本为 `xv6-riscv/tests/run_ext2_tests.py`，输出在 `xv6-riscv/test-output/ext2-regression-2026-10-23/`；嵌套目录测试输出在 `xv6-riscv/test-output/ext2-nested-2026-10-23/`。
 
-当前 FAT32 限制：只接受从设备偏移 0 开始的 FAT32 原始卷，支持 FAT 8.3 短文件名；没有分区表解析、VFAT 长文件名、写入、格式化、权限、符号链接或修复功能。没有完成全量 `usertests`、畸形 FAT32 卷的内核端故障注入或 LoongArch 移植验收。下一步可补足 FAT32 内核端异常卷边界测试，并评估 VFAT；ext2 后续仍可推进子目录和删除。
+当前 FAT32 限制：只接受从设备偏移 0 开始的 FAT32 原始卷，支持 FAT 8.3 短文件名；没有分区表解析、VFAT 长文件名、写入、格式化、权限、符号链接或修复功能。已验证引导签名损坏时拒绝挂载，但尚未对所有畸形 BPB、FAT 表和簇链做内核端故障注入；也未完成全量 `usertests` 或 LoongArch 移植验收。下一步可扩充 FAT32 异常卷边界测试并评估 VFAT；ext2 后续仍可推进子目录写入和删除。
 
 ## 2026-10-23：ext2 嵌套目录读取回归
 
