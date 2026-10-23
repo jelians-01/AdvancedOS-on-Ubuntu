@@ -1,6 +1,7 @@
 #include "kernel/types.h"
 #include "kernel/stat.h"
 #include "kernel/fcntl.h"
+#include "kernel/vfs_dirent.h"
 #include "user/user.h"
 
 static char payload[12289];
@@ -97,7 +98,7 @@ space_test(const char *kind)
     }
     close(fd);
   }
-  if(count == 0 || count == 40) fail("space limit not reached");
+  if(count == 0 || (!directory && count == 40)) fail("space limit not reached");
   if(blocks){
     int fd = create("/mnt/no-space");
     if(write(fd, payload, 1024) != -1) fail("full disk accepted data");
@@ -107,6 +108,22 @@ space_test(const char *kind)
     if(write(fd, payload, 12288) != 12288) fail("ENOSPC recovery after truncate");
     close(fd);
     check("/mnt/f00", payload, 12288);
+  } else if(directory) {
+    if(count != 40) fail("directory expansion stopped early");
+    // O_CREATE on an existing regular file is idempotent and must not
+    // consume another inode or append a duplicate directory record.
+    int dup = open(path, O_CREATE | O_RDWR);
+    if(dup < 0) fail("directory duplicate create");
+    struct stat st;
+    if(fstat(dup, &st) < 0 || st.size != 0) fail("directory duplicate size");
+    close(dup);
+    int dirfd = open("/mnt", O_RDONLY), seen = 0;
+    struct vfs_dirent de;
+    if(dirfd < 0) fail("directory readdir open");
+    while(readdir(dirfd, &de) == 1)
+      if(de.namelen > 1 && de.name[0] == 'f') seen++;
+    close(dirfd);
+    if(seen != 40) fail("directory expansion enumeration");
   } else {
     for(int i = 0; i < 3; i++)
       if(open(path, O_CREATE | O_RDWR) != -1) fail("limit retry accepted");

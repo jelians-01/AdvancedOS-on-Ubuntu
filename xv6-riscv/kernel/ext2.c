@@ -975,8 +975,8 @@ done:
   return r;
 }
 
-// Prepare a root directory slot entirely in memory before allocating an inode.
-// Directory growth and subdirectory modification are outside this milestone.
+// Prepare a root directory slot entirely in memory before allocating resources.
+// Return 1 for an additional direct block, 0 for an existing slot, -1 on error.
 static int
 ext2_dir_slot(struct ext2_inode *dir, uint len, uchar *buf, uint *block, uint *slot)
 {
@@ -1008,7 +1008,17 @@ ext2_dir_slot(struct ext2_inode *dir, uint len, uchar *buf, uint *block, uint *s
       pos += rec;
     }
   }
-  return -1;
+  uint count = dir->size_lo / fs->block_size;
+  if(count == 0 || count >= EXT2_NDIR_BLOCKS ||
+     dir->sectors != count * (fs->block_size / 512))
+    return -1;
+  for(uint i = count; i < EXT2_N_BLOCKS; i++)
+    if(dir->blocks[i]) return -1;
+  memset(buf, 0, fs->block_size);
+  *block = 0;
+  *slot = 0;
+  put16(buf + 4, fs->block_size);
+  return 1;
 }
 
 static int
@@ -1019,7 +1029,7 @@ ext2_create_file(void *data, const char *name, uint len, void **out_node)
   uchar *buf = 0, *raw = 0;
   uint inum = 0, block, slot;
   uint64 inode_off;
-  int r = -1, started = 0, found;
+  int r = -1, started = 0, found, grow, ar;
   *out_node = 0;
   if(len == 0 || len > VFS_NAME_MAX || (len == 1 && name[0] == '.') ||
      (len == 2 && name[0] == '.' && name[1] == '.'))
@@ -1045,15 +1055,31 @@ ext2_create_file(void *data, const char *name, uint len, void **out_node)
   }
   if(found < 0) goto done;
   buf = kalloc(); raw = kalloc();
-  if(buf == 0 || raw == 0 || ext2_dir_slot(dir, len, buf, &block, &slot) < 0 ||
-     ext2_write_state(fs, 0) < 0)
+  if(buf == 0 || raw == 0)
+    goto done;
+  grow = ext2_dir_slot(dir, len, buf, &block, &slot);
+  if(grow < 0 || ext2_write_state(fs, 0) < 0)
     goto done;
   started = 1;
-  if(ext2_bitmap(fs, 1, &inum, 1) != 0) goto done;
+  ar = ext2_bitmap(fs, 1, &inum, 1);
+  if(ar != 0){
+    if(ar < 0) fs->write_failed = 1;
+    goto done;
+  }
   child = ext2_iget(fs, inum);
   if(child == 0){
     if(ext2_bitmap(fs, 1, &inum, 0) != 0) fs->write_failed = 1;
     goto done;
+  }
+  if(grow){
+    ar = ext2_bitmap(fs, 0, &block, 1);
+    if(ar != 0){
+      // The inode is still unpublished. ENOSPC must return its reservation;
+      // an I/O error instead leaves the volume dirty for offline repair.
+      if(ar < 0 || ext2_bitmap(fs, 1, &inum, 0) != 0)
+        fs->write_failed = 1;
+      goto done;
+    }
   }
   memset(raw, 0, fs->inode_size);
   put16(raw, EXT2_S_IFREG | 0644);
@@ -1067,6 +1093,24 @@ ext2_create_file(void *data, const char *name, uint len, void **out_node)
   put16(buf + slot + 6, len);
   memmove(buf + slot + EXT2_DIRENT_HEADER, name, len);
   r = ext2_write_block(fs, block, buf);
+  if(r == 0 && grow){
+    uint old_size = dir->size_lo, old_sectors = dir->sectors;
+    uint new_index = old_size / fs->block_size;
+    // Publish a fully initialized directory block while holding both locks.
+    // Readers cannot see a larger directory until its inode is stored.
+    dir->blocks[new_index] = block;
+    dir->size_lo += fs->block_size;
+    dir->sectors += fs->block_size / 512;
+    r = ext2_store_inode(dir, raw);
+    if(r < 0){
+      // A failed device write leaves the volume dirty, but keep cached state
+      // aligned with the last metadata state we know was fully written.
+      dir->blocks[new_index] = 0;
+      dir->size_lo = old_size;
+      dir->sectors = old_sectors;
+      fs->write_failed = 1;
+    }
+  }
 done:
   if(started && ext2_write_state(fs, 1) < 0) r = -1;
   if(r == 0) *out_node = child;

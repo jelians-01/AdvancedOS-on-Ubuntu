@@ -62,12 +62,22 @@ def prepare(out):
                 'initial_super_free': super_free(image),
                 'results': []}
     manifest['edge_initial_free'] = {}
-    for kind in ('blocks', 'inodes', 'directory', 'zero', 'one'):
+    for kind in ('blocks', 'inodes', 'directory', 'zero', 'one',
+                 'dirlimit', 'dirblocks', 'dirinodes'):
         edge = out / f'{kind}.img'
         with edge.open('wb') as f:
-            f.truncate(128 * 1024)
+            f.truncate((1024 if kind == 'dirlimit' else 128) * 1024)
         command(['mke2fs', '-t', 'ext2', '-F', '-b', '1024', '-I', '128',
-                 '-O', 'none', '-m', '0', '-N', '16' if kind == 'inodes' else '64', edge], log)
+                 '-O', 'none', '-m', '0', '-N',
+                 '16' if kind == 'inodes' else '24' if kind == 'dirinodes' else
+                 '256' if kind == 'dirlimit' else '64', edge], log)
+        if kind == 'dirinodes':
+            empty = out / 'empty'
+            empty.write_bytes(b'')
+            # 24 inodes minus 11 reserved and 6 fixtures leaves 7. Seven
+            # 120-byte names then fill this directory exactly to its next block.
+            for i in range(6):
+                command(['debugfs', '-w', '-R', f'write {empty} /i{i}', edge], log)
         command(['e2fsck', '-fn', edge], log)
         manifest['edge_initial_free'][kind] = super_free(edge)
         if kind in ('zero', 'one'):
@@ -174,6 +184,16 @@ def run(out):
         guest(out, kind, [(f'ext2single {kind}', 'ext2single: TRANSITION PASSED')],
               image=f'{kind}.img')
         manifest['results'].append(f'indirect transition with {kind} free blocks: PASS')
+    for kind, mode in (('dirlimit', ''), ('dirblocks', 'blocks'), ('dirinodes', 'inodes')):
+        guest(out, kind, [(f'ext2dirgrow {mode}'.rstrip(),
+                          f'ext2dirgrow: {"LIMIT" if not mode else mode.upper()} PASSED')],
+              image=f'{kind}.img')
+        manifest['results'].append(f'{kind} growth/limit/duplicate create: PASS')
+    growth_hash = digest(out / 'dirlimit.img')
+    guest(out, 'dirreboot', [('ext2dirgrow verify', 'ext2dirgrow: PERSISTENCE PASSED')],
+          image='dirlimit.img')
+    assert digest(out / 'dirlimit.img') == growth_hash, 'growth reboot changed image'
+    manifest['results'].append('expanded-directory same-image reboot: PASS')
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=2))
 
 
@@ -210,6 +230,10 @@ def check(out):
                              (out / f'{kind}.log').read_text()).group(1))
         if kind == 'blocks':
             assert after_edge[0] == 0 and before_edge[1] - after_edge[1] == count + 1
+        elif kind == 'directory':
+            assert count == 40
+            assert before_edge[0] - after_edge[0] == 4
+            assert before_edge[1] - after_edge[1] == count
         else:
             assert before_edge[0] == after_edge[0]
             assert before_edge[1] - after_edge[1] == count
@@ -232,6 +256,25 @@ def check(out):
             command(['debugfs', '-R', f'dump /{name} {target}', edge], log)
             assert target.read_bytes() == data
         manifest['results'].append(f'{kind} transition fsck/bytes/counters: PASS')
+    for kind, used_blocks, used_inodes, root_size, count, length in (
+            ('dirlimit', 119, 108, 12288, 108, 96),
+            ('dirblocks', 1, 8, 2048, 8, 120),
+            ('dirinodes', 0, 7, 1024, 7, 120)):
+        edge = out / f'{kind}.img'
+        command(['e2fsck', '-fn', edge], log)
+        before_edge = manifest['edge_initial_free'][kind]
+        after_edge = super_free(edge)
+        assert before_edge[0] - after_edge[0] == used_blocks, (kind, before_edge, after_edge)
+        assert before_edge[1] - after_edge[1] == used_inodes, (kind, before_edge, after_edge)
+        root_info = command(['debugfs', '-R', 'stat /', edge], log).decode()
+        assert re.search(r'Size:\s+' + str(root_size) + r'\b', root_info)
+        assert re.search(r'Blockcount:\s+' + str(root_size // 512) + r'\b', root_info)
+        for i in range(count):
+            name = f'g{i:03d}' + 'a' * (length - 4)
+            target = out / f'export-{kind}-{i}'
+            command(['debugfs', '-R', f'dump /{name} {target}', edge], log)
+            assert target.read_bytes() == (bytes([i]) if kind == 'dirlimit' else b'')
+        manifest['results'].append(f'{kind} fsck/all bytes/exact counters: PASS')
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=2))
     print('EXT2 WRITE TEST MATRIX PASSED', flush=True)
 

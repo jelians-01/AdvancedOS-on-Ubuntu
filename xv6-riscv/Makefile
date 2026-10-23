@@ -155,6 +155,7 @@ UPROGS=\
 	$U/_ext2test\
 	$U/_ext2write\
 	$U/_ext2single\
+	$U/_ext2dirgrow\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
