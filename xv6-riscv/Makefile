@@ -28,6 +28,7 @@ OBJS = \
   $K/vfs_mount_test.o \
   $K/vfs_xv6.o \
   $K/ext2.o \
+  $K/fat32.o \
   $K/pipe.o \
   $K/exec.o \
   $K/sysfile.o \
@@ -156,6 +157,7 @@ UPROGS=\
 	$U/_ext2write\
 	$U/_ext2single\
 	$U/_ext2dirgrow\
+	$U/_fat32test\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\

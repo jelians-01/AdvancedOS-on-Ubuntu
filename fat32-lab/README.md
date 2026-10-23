@@ -1,10 +1,10 @@
-# FAT32 宿主端只读解析器
+# FAT32 只读解析器与 xv6 VFS 后端
 
-这个目录是 B 负责的 FAT32 工作线的第一个可验证阶段：在 Linux 宿主机上读取一个 FAT32 磁盘镜像，解析卷参数、目录和短文件名，并按需读取文件内容。它是独立实验程序，**还没有接入 xv6，也不是内核 FAT32 后端**。目前只支持 FAT 8.3 短文件名，不支持长文件名（VFAT）。
+本目录包含 B 的 Linux 宿主端 FAT32 解析器和测试夹具。xv6 内核后端位于 `xv6-riscv/kernel/fat32.c`，通过 VFS 从设备 3 只读挂载到 `/fat`。内核支持目录遍历、8.3 短文件名查找、嵌套目录及按偏移读取文件；不支持写入或 VFAT 长文件名。
 
 ## 能做什么
 
-`fat32_reader` 会以只读方式打开镜像，可以：
+宿主程序 `fat32_reader` 会以只读方式打开镜像，可以：
 
 - `info`：读取 BIOS 参数块（BPB），显示扇区、簇、FAT 和数据区等几何信息。
 - `ls`：枚举卷根目录或指定子目录。
@@ -18,7 +18,7 @@
 
 - 只接受不带分区表偏移的 FAT32 原始卷镜像（superfloppy）；BPB 中隐藏扇区必须为零。
 - 文件路径只支持 FAT 8.3 短文件名，按大小写不敏感方式查找；不解码 VFAT 长文件名和 OEM 字符集。
-- 不支持写入、格式化、挂载、符号链接、权限语义或 xv6 系统调用。
+- 宿主程序和 xv6 内核后端均不支持 FAT32 写入或格式化。内核端未实现符号链接和 FAT 权限语义。
 - 输入卷必须符合 FAT32 的数据簇数量范围。小型 FAT12/FAT16 卷不会因为格式标记字符串而被误认作 FAT32。
 - 目录项和文件数据只按 FAT32 的首簇、长度及簇链解释；此阶段不实现 FAT32 修复或一致性修复。
 
@@ -54,6 +54,15 @@ make clean test
 - active FAT 选择、镜像 FAT 不一致、目录/文件簇链循环、提前结束、坏簇和错误 BPB 拒绝。
 - 对损坏输入报错时标准输出为空，并且只读操作前后镜像 SHA-256 不变。
 
-## 下一阶段
+## xv6 VFS 集成测试
 
-这个宿主程序先用于学习磁盘布局、测试 FAT32 解析规则和建立可复现测试数据。下一步才是依据项目的 VFS 与块设备接口设计 xv6 内核端 FAT32 后端；在开始内核集成前，需要先确认公共接口约定、设备编号和挂载测试入口。
+`xv6-riscv/tests/run_fat32_vfs_tests.py` 会准备一次性 FAT32 测试卷，将其作为设备 3 以只读方式连接到 QEMU，并运行 `fat32test`、VFS 目录测试和 `usertests copyin`。检查阶段核对镜像 SHA-256、`fsck.fat -n` 和宿主端文件读回。输出路径必须是不存在的新目录，例如：
+
+```sh
+cd xv6-riscv
+python3 tests/run_fat32_vfs_tests.py prepare /tmp/fat32-vfs-test
+python3 tests/run_fat32_vfs_tests.py run /tmp/fat32-vfs-test
+python3 tests/run_fat32_vfs_tests.py check /tmp/fat32-vfs-test
+```
+
+执行前需要编译 `kernel/kernel` 与 `fs.img`；`prepare` 和 `check` 需要 `mkfs.fat`、`fsck.fat`，QEMU 测试需要支持 `virt` 的 `qemu-system-riscv64`。本地实现范围仍是只读的 FAT32 原始卷（卷从设备字节偏移 0 开始）和 8.3 短文件名。后续可补充畸形内核卷、不同扇区/簇大小的边界测试，再决定是否实现 VFAT 长文件名。
