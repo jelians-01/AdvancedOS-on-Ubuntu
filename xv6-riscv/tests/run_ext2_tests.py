@@ -54,6 +54,10 @@ def prepare(out):
         host = out / name
         host.write_bytes(data)
         command(['debugfs', '-w', '-R', f'write {host} /{name}', image], log)
+    command(['debugfs', '-w', '-R', 'mkdir /subdir', image], log)
+    nested = out / 'nested.txt'
+    nested.write_bytes(b'nested read works\n')
+    command(['debugfs', '-w', '-R', f'write {nested} /subdir/nested.txt', image], log)
     command(['e2fsck', '-fn', image], log)
     manifest = {'format': 'ext2,32MiB,1KiB blocks,128-byte inodes,-O none',
                 'cpu_count': 3, 'machine': 'virt', 'cache': 'writeback',
@@ -212,6 +216,9 @@ def check(out):
         target = out / f'export-{name}'
         command(['debugfs', '-R', f'dump /{name} {target}', out / 'ext2.img'], log)
         assert target.read_bytes() == data, f'{name}: host byte comparison failed'
+    nested = out / 'export-nested.txt'
+    command(['debugfs', '-R', f'dump /subdir/nested.txt {nested}', out / 'ext2.img'], log)
+    assert nested.read_bytes() == b'nested read works\n', 'nested file host byte comparison failed'
     manifest = json.loads((out / 'manifest.json').read_text())
     before = manifest['initial_super_free']
     after = super_free(out / 'ext2.img')
