@@ -158,6 +158,7 @@ UPROGS=\
 	$U/_ext2single\
 	$U/_ext2dirgrow\
 	$U/_fat32test\
+	$U/_fat32persist\
 	$U/_fat32missing\
 	$U/_grind\
 	$U/_wc\

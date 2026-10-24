@@ -1,6 +1,6 @@
 # B-ext2：ext2 与 FAT32 文件系统工作
 
-本分支负责 B 的 ext2/FAT32 文件系统工作，已合入 C 的块设备接口和 A 的 VFS。ext2 已在 xv6 内核中支持受限读取、创建、写入、截断和根目录扩容；FAT32 已接入 xv6 VFS，可从设备 3 挂载到 `/fat` 并只读访问。
+本分支负责 B 的 ext2/FAT32 文件系统工作，已合入 C 的块设备接口和 A 的 VFS。ext2 已在 xv6 内核中支持受限读取、创建、写入、截断和根目录扩容；FAT32 已接入 xv6 VFS，可从设备 3 挂载到 `/fat` 并支持 8.3 普通文件的创建、写入和截断。
 
 ## 当前进展
 
@@ -15,10 +15,10 @@
 | xv6 ↔ ext2 双向复制 | 3073 和 30001 字节完整比较、同镜像重启读回通过 |
 | 空间不足与一致性 | 块/inode/目录耗尽、索引分配失败回收及目录扩容边界通过；测试镜像 `e2fsck` 和逐字节检查通过 |
 | FAT32 宿主端原型 | BPB、短文件名目录、碎片簇链只读解析和损坏输入测试通过 |
-| xv6 内核 FAT32 | 设备 3 只读挂载 `/fat`；根/嵌套目录、8.3 查找、碎片簇链、文件属性和读取通过；写入/截断/创建拒绝 |
+| xv6 内核 FAT32 | 设备 3 挂载 `/fat`；根/嵌套目录、8.3 查找、碎片簇链、文件属性、创建、跨簇写入、截断和重启读回通过 |
 | FAT32 可选挂载 | 设备缺失或引导签名损坏时，xv6 保持原生根文件系统可用且不创建 `/fat` |
 
-宿主端程序用于格式回归；内核端 `xv6-riscv/kernel/ext2.c` 与 `fat32.c` 按 A 的 VFS ABI 和 C 的 D1 字节设备 ABI 接入。设备 2 是 ext2 数据卷并挂载到 `/mnt`；设备 3 是只读 FAT32 卷并挂载到 `/fat`。ext2 新建仍限定于根目录；目录最多使用 12 个直接块（本配置下 12 KiB）；普通文件支持 12 个直接块和 256 个单级间接数据块，共 268 KiB。尚不支持双/三级间接块写入、子目录创建、link、unlink 或崩溃恢复。FAT32 当前只支持原始卷偏移为零的 FAT32 镜像和 8.3 短文件名，不支持 VFAT 长文件名及任何写入。实现和限制见 [FAT32 说明](fat32-lab/README.md)；完整 ext2 限制、测试和复现命令见 [进展记录](ext2-lab/RESULTS.md)。
+宿主端程序用于格式回归；内核端 `xv6-riscv/kernel/ext2.c` 与 `fat32.c` 按 A 的 VFS ABI 和 C 的 D1 字节设备 ABI 接入。设备 2 是 ext2 数据卷并挂载到 `/mnt`；设备 3 是 FAT32 卷并挂载到 `/fat`。ext2 新建仍限定于根目录；目录最多使用 12 个直接块（本配置下 12 KiB）；普通文件支持 12 个直接块和 256 个单级间接数据块，共 268 KiB。尚不支持双/三级间接块写入、子目录创建、link、unlink 或崩溃恢复。FAT32 当前只支持原始卷偏移为零的 FAT32 镜像和 8.3 短文件名；内核支持普通文件创建、跨簇写入和截断，但不支持目录创建、删除、VFAT 长文件名、格式化或崩溃恢复。实现和限制见 [FAT32 说明](fat32-lab/README.md)；完整 ext2 限制、测试和复现命令见 [进展记录](ext2-lab/RESULTS.md)。
 
 ## C 提供的块设备依赖
 
@@ -31,7 +31,7 @@ int blk_size(uint dev, uint64 *out_bytes);
 int blk_flush(uint dev);
 ```
 
-设备 2 用于 ext2 数据卷，设备 3 用于只读 FAT32 卷。接口约束、设备映射和验证证据见 [D1 交付说明](任务分配/C成员/D1交付说明.md)。
+设备 2 用于 ext2 数据卷，设备 3 用于 FAT32 卷。接口约束、设备映射和验证证据见 [D1 交付说明](任务分配/C成员/D1交付说明.md)。
 
 ## 目录结构
 
@@ -42,14 +42,15 @@ ext2-lab/README.md                 解析器使用说明
 ext2-lab/RESULTS.md                验证结果和当前限制
 xv6-riscv/kernel/ext2.c            xv6 ext2 后端
 xv6-riscv/kernel/ext2.h            ext2 挂载入口
-xv6-riscv/kernel/fat32.c           xv6 FAT32 只读后端
+xv6-riscv/kernel/fat32.c           xv6 FAT32 后端
 xv6-riscv/kernel/fat32.h           FAT32 挂载入口
 xv6-riscv/user/ext2write.c         内核写入、复制及边界测试
 xv6-riscv/user/ext2single.c        单级间接块、容量边界及回收测试
 xv6-riscv/tests/run_ext2_tests.py  镜像准备、QEMU 测试和宿主校验
-xv6-riscv/user/fat32test.c         FAT32 VFS 读取与只读行为测试
+xv6-riscv/user/fat32test.c         FAT32 VFS 读取、创建、写入和截断测试
+xv6-riscv/user/fat32persist.c      FAT32 重启持久化读回测试
 xv6-riscv/user/fat32missing.c      FAT32 可选挂载失败回退测试
-xv6-riscv/tests/run_fat32_vfs_tests.py FAT32 镜像准备、QEMU 集成和只读校验
+xv6-riscv/tests/run_fat32_vfs_tests.py FAT32 镜像准备、QEMU 集成和可写校验
 ```
 
 ## 编译和使用

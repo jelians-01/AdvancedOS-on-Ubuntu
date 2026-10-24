@@ -75,7 +75,7 @@ def guest(out, commands, *, fat_image="fat32.img", log_name="qemu.log"):
             "-device", "virtio-blk-device,drive=d0,bus=virtio-mmio-bus.0",
             ]
     if fat_image is not None:
-        args += ["-drive", f"file={out / fat_image},if=none,format=raw,id=d2,cache=writeback,readonly=on",
+        args += ["-drive", f"file={out / fat_image},if=none,format=raw,id=d2,cache=writeback",
                  "-device", "virtio-blk-device,drive=d2,bus=virtio-mmio-bus.2"]
     process = subprocess.Popen(args, stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -130,6 +130,8 @@ def run(out):
     guest(out, [("fat32test", "fat32test: ALL TESTS PASSED"),
                 ("vfsdir", "vfsdir: ALL TESTS PASSED"),
                 ("usertests copyin", "ALL TESTS PASSED")])
+    guest(out, [("fat32persist", "fat32persist: PASS")],
+          log_name="qemu-write-reboot.log")
     guest(out, [("fat32missing", "fat32missing: PASS")],
           fat_image="fat32-bad-signature.img", log_name="qemu-bad-signature.log")
     guest(out, [("fat32missing", "fat32missing: PASS")],
@@ -137,17 +139,21 @@ def run(out):
 
 
 def check(out):
-    expected = (out / "fat32.sha256").read_text().strip()
-    actual = digest(out / "fat32.img")
-    if actual != expected:
-        raise AssertionError("FAT32 read-only guest changed the fixture image")
     bad_expected = (out / "fat32-bad-signature.sha256").read_text().strip()
     if digest(out / "fat32-bad-signature.img") != bad_expected:
         raise AssertionError("invalid FAT32 fixture unexpectedly changed")
     command(["fsck.fat", "-n", str(out / "fat32.img")], log=out / "check.log")
-    command([str(FATLAB / "build/fat32_reader"), str(out / "fat32.img"),
-             "cat", "/HELLO.TXT"], log=out / "check.log")
-    print("PASS: FAT32 image hash unchanged, fsck.fat clean, host reader readback passed")
+    hello = subprocess.run([str(FATLAB / "build/fat32_reader"), str(out / "fat32.img"),
+                            "cat", "/HELLO.TXT"], stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE)
+    if hello.returncode or hello.stdout != b"hello from FAT32\n":
+        raise AssertionError("host reader HELLO.TXT readback failed")
+    new_file = subprocess.run([str(FATLAB / "build/fat32_reader"), str(out / "fat32.img"),
+                               "cat", "/NEW.TXT"], stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE)
+    if new_file.returncode or new_file.stdout != b"ok\n":
+        raise AssertionError("host reader NEW.TXT write readback failed")
+    print("PASS: FAT32 image writable, fsck.fat clean, host readback passed")
 
 
 def main():

@@ -89,25 +89,38 @@ test_nested(void)
 }
 
 static void
-test_read_only(void)
+test_write_create_truncate(void)
 {
-  static const char replacement[] = "X";
-  int fd;
+  static uchar payload[1700];
+  static uchar buf[1700];
+  int fd, r;
   struct stat st;
 
-  // The VFS may let us open an existing file for writing, but the FAT32
-  // backend has no write callback, so data changes must fail.
-  fd = open("/fat/hello.txt", O_WRONLY);
-  check(fd >= 0, "open existing FAT32 file for write test");
-  check(write(fd, replacement, 1) == -1, "reject FAT32 file write");
+  for(int i = 0; i < sizeof(payload); i++)
+    payload[i] = (uchar)((i * 13 + 7) % 256);
+  fd = open("/fat/new.txt", O_CREATE | O_RDWR | O_TRUNC);
+  check(fd >= 0, "create FAT32 NEW.TXT");
+  check(write(fd, payload, sizeof(payload)) == sizeof(payload),
+        "write FAT32 NEW.TXT across clusters");
   close(fd);
-  check(open("/fat/hello.txt", O_WRONLY | O_TRUNC) == -1,
-        "reject FAT32 truncate");
-  check(open("/fat/new.txt", O_CREATE | O_WRONLY) == -1,
-        "reject FAT32 create");
-  check(stat("/fat/new.txt", &st) == -1,
-        "rejected FAT32 create left no directory entry");
-  test_hello();
+  fd = open("/fat/new.txt", O_RDONLY);
+  check(fd >= 0 && fstat(fd, &st) == 0 && st.size == sizeof(payload),
+        "stat FAT32 NEW.TXT");
+  r = read(fd, buf, sizeof(buf));
+  check(r == sizeof(payload) && memcmp(buf, payload, sizeof(payload)) == 0,
+        "read FAT32 NEW.TXT");
+  close(fd);
+
+  fd = open("/fat/new.txt", O_WRONLY | O_TRUNC);
+  check(fd >= 0, "open FAT32 NEW.TXT for truncate");
+  close(fd);
+  check(stat("/fat/new.txt", &st) == 0 && st.size == 0,
+        "truncate FAT32 NEW.TXT");
+
+  fd = open("/fat/new.txt", O_WRONLY);
+  check(fd >= 0 && write(fd, "ok\n", 3) == 3,
+        "rewrite truncated FAT32 NEW.TXT");
+  close(fd);
 }
 
 int
@@ -119,7 +132,7 @@ main(void)
   test_hello();
   test_fragmented();
   test_nested();
-  test_read_only();
+  test_write_create_truncate();
   check(stat("/fat/empty.txt", &st) == 0 && st.size == 0,
         "empty file attributes");
   check(stat("/fat/late.txt", &st) == 0 && st.size == 0,
