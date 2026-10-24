@@ -187,6 +187,7 @@ proc_pagetable(struct proc *p)
   if(pagetable == 0)
     return 0;
 
+#ifndef ARCH_LOONGARCH
   // map the trampoline code (for system call return)
   // at the highest user virtual address.
   // only the supervisor uses it, on the way
@@ -206,6 +207,7 @@ proc_pagetable(struct proc *p)
     return 0;
   }
 
+#endif
   return pagetable;
 }
 
@@ -214,8 +216,10 @@ proc_pagetable(struct proc *p)
 void
 proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
+#ifndef ARCH_LOONGARCH
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
+#endif
   uvmfree(pagetable, sz);
 }
 
@@ -281,7 +285,7 @@ kfork(void)
   *(np->trapframe) = *(p->trapframe);
 
   // Cause fork to return 0 in the child.
-  np->trapframe->a0 = 0;
+  arch_result(np->trapframe, 0);
 
   // increment reference counts on open file descriptors.
   for(i = 0; i < NOFILE; i++)
@@ -457,7 +461,7 @@ scheduler(void)
     }
     if(found == 0) {
       // nothing to run; stop running on this core until an interrupt.
-      asm volatile("wfi");
+      arch_idle();
     }
   }
 }
@@ -505,7 +509,9 @@ yield(void)
 void
 forkret(void)
 {
+#ifndef ARCH_LOONGARCH
   extern char userret[];
+#endif
   static int first = 1;
   struct proc *p = myproc();
 
@@ -520,7 +526,8 @@ forkret(void)
     vfs_selftest();
     vfs_xv6_init();
     // Device 2 is optional; keep the native root available when it is absent.
-    ext2_mount(2, "/mnt");
+    extern void project_mounts(void);
+    project_mounts();
     // Root acquisition may sleep; p->lock was released above.
     if(vfs_xv6_root(&p->cwd) < 0)
       panic("init cwd");
@@ -531,17 +538,23 @@ forkret(void)
 
     // We can invoke kexec() now that file system is initialized.
     // Put the return value (argc) of kexec into a0.
-    p->trapframe->a0 = kexec("/init", (char *[]){ "/init", 0 });
-    if (p->trapframe->a0 == -1) {
+    int argc = kexec("/init", (char *[]){ "/init", 0 });
+    arch_result(p->trapframe, argc);
+    if (argc == -1) {
       panic("exec");
     }
   }
 
   // return to user space, mimicing usertrap()'s return.
   prepare_return();
+#ifdef ARCH_LOONGARCH
+  extern void loong_user_return(struct trapframe *);
+  loong_user_return(p->trapframe);
+#else
   uint64 satp = MAKE_SATP(p->pagetable);
   uint64 trampoline_userret = TRAMPOLINE + (userret - trampoline);
   ((void (*)(uint64))trampoline_userret)(satp);
+#endif
 }
 
 // Sleep on channel chan, releasing condition lock lk.
@@ -673,12 +686,12 @@ void
 procdump(void)
 {
   static char *states[] = {
-  [UNUSED]    "unused",
-  [USED]      "used",
-  [SLEEPING]  "sleep ",
-  [RUNNABLE]  "runble",
-  [RUNNING]   "run   ",
-  [ZOMBIE]    "zombie"
+  [UNUSED] = "unused",
+  [USED] = "used",
+  [SLEEPING] = "sleep ",
+  [RUNNABLE] = "runble",
+  [RUNNING] = "run   ",
+  [ZOMBIE] = "zombie"
   };
   struct proc *p;
   char *state;

@@ -1,0 +1,62 @@
+# Shared xv6 kernel and user sources, architecture-isolated output files.
+LA_TOOLS ?= /home/jelians/AdvancedOS-tools/llvm18
+LA_CC ?= $(LA_TOOLS)/usr/bin/clang-18
+LA_LD ?= $(LA_TOOLS)/usr/bin/ld.lld-18
+export LD_LIBRARY_PATH := $(LA_TOOLS)/usr/lib/x86_64-linux-gnu:$(LD_LIBRARY_PATH)
+LA_BUILD := build/loongarch
+LA_ARCH := kernel/arch/loongarch
+LA_FLAGS := --target=loongarch64-unknown-none -march=loongarch64 -mabi=lp64s -O1 -g -Wall -Werror -Wno-main -Wno-unused-but-set-variable -Wno-deprecated-non-prototype -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -fno-omit-frame-pointer -I. -Ikernel -DARCH_LOONGARCH -MMD -MP
+LA_COMMON := console printf kalloc spinlock string main vm proc syscall sysproc bio fs log sleeplock file vfs vfs_test vfs_mount_test vfs_xv6 ext2 fat32 project_fs pipe exec sysfile blkdev
+LA_PLATFORM := entry swtch vector trap uart plic pci
+LA_OBJS := $(addprefix $(LA_BUILD)/kernel/,$(addsuffix .o,$(LA_COMMON))) $(addprefix $(LA_BUILD)/arch/,$(addsuffix .o,$(LA_PLATFORM)))
+LA_PROGRAMS := archtest ext2write ext2single ext2dirgrow fat32persist fat32missing vfstest1 vfstest2 cat echo forktest grep init kill ln ls mkdir rm sh stressfs usertests vfspath vfsexec vfsdir ext2test fat32test sync testrun threefstest grind wc zombie logstress forphan dorphan
+LA_USERS := $(addprefix $(LA_BUILD)/user/_,$(LA_PROGRAMS))
+LA_ULIB := $(addprefix $(LA_BUILD)/user/,ulib.o printf.o umalloc.o usys.o start.o)
+.DELETE_ON_ERROR:
+$(LA_OBJS) $(LA_ULIB) $(addprefix $(LA_BUILD)/user/,$(addsuffix .o,$(LA_PROGRAMS))): Makefile.loongarch
+.DEFAULT_GOAL := all
+.PHONY: all qemu
+all: $(LA_BUILD)/kernel.elf $(LA_BUILD)/fs.img
+$(LA_BUILD)/kernel/%.o: kernel/%.c
+	@mkdir -p $(@D)
+	$(LA_CC) $(LA_FLAGS) -c $< -o $@
+$(LA_BUILD)/arch/%.o: $(LA_ARCH)/%.c
+	@mkdir -p $(@D)
+	$(LA_CC) $(LA_FLAGS) -c $< -o $@
+$(LA_BUILD)/arch/%.o: $(LA_ARCH)/%.S
+	@mkdir -p $(@D)
+	$(LA_CC) $(LA_FLAGS) -c $< -o $@
+$(LA_BUILD)/kernel.elf: $(LA_OBJS) $(LA_ARCH)/kernel.ld
+	$(LA_LD) -z max-page-size=4096 -T $(LA_ARCH)/kernel.ld -o $@ $(LA_OBJS)
+$(LA_BUILD)/user/%.o: user/%.c
+	@mkdir -p $(@D)
+	$(LA_CC) $(LA_FLAGS) -c $< -o $@
+$(LA_BUILD)/user/usys.S: user/usys.pl kernel/syscall.h $(LA_ARCH)/usys.py
+	@mkdir -p $(@D)
+	python3 $(LA_ARCH)/usys.py > $@
+$(LA_BUILD)/user/usys.o: $(LA_BUILD)/user/usys.S
+	$(LA_CC) $(LA_FLAGS) -c $< -o $@
+$(LA_BUILD)/user/start.o: $(LA_ARCH)/user-start.S
+	@mkdir -p $(@D)
+	$(LA_CC) $(LA_FLAGS) -c $< -o $@
+$(LA_BUILD)/user/_%: $(LA_BUILD)/user/%.o $(LA_ULIB) $(LA_ARCH)/user.ld
+	$(LA_LD) -z max-page-size=4096 -T $(LA_ARCH)/user.ld -o $@ $< $(LA_ULIB)
+$(LA_BUILD)/mkfs: mkfs/mkfs.c kernel/fs.h kernel/param.h
+	@mkdir -p $(@D)
+	cc -I. -o $@ $<
+$(LA_BUILD)/fs.img: $(LA_BUILD)/mkfs README $(LA_USERS)
+	cp README $(LA_BUILD)/README
+	cd $(LA_BUILD) && ./mkfs fs.img README $(addprefix user/_,$(LA_PROGRAMS))
+LA_QEMU ?= qemu-system-loongarch64
+LA_QEMUOPTS := -machine virt -m 1G -smp 1 -nographic -nic none -kernel $(LA_BUILD)/kernel.elf
+LA_QEMUOPTS += -drive file=$(LA_BUILD)/fs.img,if=none,format=raw,id=root -device virtio-blk-pci,drive=root,disable-legacy=on,addr=1
+ifneq ($(DISK2),)
+LA_QEMUOPTS += -drive file=$(DISK2),if=none,format=raw,id=ext2 -device virtio-blk-pci,drive=ext2,disable-legacy=on,addr=2
+endif
+ifneq ($(DISK3),)
+LA_QEMUOPTS += -drive file=$(DISK3),if=none,format=raw,id=fat32 -device virtio-blk-pci,drive=fat32,disable-legacy=on,addr=3
+endif
+qemu: all
+	$(LA_QEMU) $(LA_QEMUOPTS)
+.PRECIOUS: $(LA_BUILD)/user/%.o
+-include $(LA_BUILD)/kernel/*.d $(LA_BUILD)/arch/*.d $(LA_BUILD)/user/*.d

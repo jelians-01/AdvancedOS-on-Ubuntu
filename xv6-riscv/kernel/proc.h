@@ -42,6 +42,9 @@ extern struct cpu cpus[NCPU];
 // the trapframe includes callee-saved user registers like s0-s11 because the
 // return-to-user path via usertrapret() doesn't return through
 // the entire kernel call stack.
+#ifdef ARCH_LOONGARCH
+struct trapframe { uint64 r[32]; uint64 epc; uint64 prmd; };
+#else
 struct trapframe {
   /*   0 */ uint64 kernel_satp;   // kernel page table
   /*   8 */ uint64 kernel_sp;     // top of process's kernel stack
@@ -80,6 +83,11 @@ struct trapframe {
   /* 272 */ uint64 t5;
   /* 280 */ uint64 t6;
 };
+
+#endif
+
+// Shared kernel code uses the ABI helpers instead of hardware register fields.
+#include "arch_abi.h"
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 

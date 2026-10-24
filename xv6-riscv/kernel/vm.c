@@ -27,6 +27,7 @@ kvmmake(void)
   kpgtbl = (pagetable_t) kalloc();
   memset(kpgtbl, 0, PGSIZE);
 
+#ifndef ARCH_LOONGARCH
   // uart registers
   kvmmap(kpgtbl, UART0, UART0, PGSIZE, PTE_R | PTE_W);
 
@@ -46,6 +47,7 @@ kvmmake(void)
   // the highest virtual address in the kernel.
   kvmmap(kpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 
+#endif
   // allocate and map a kernel stack for each process.
   proc_mapstacks(kpgtbl);
   
@@ -74,6 +76,16 @@ kvminit(void)
 void
 kvminithart()
 {
+#ifdef ARCH_LOONGARCH
+  extern char loong_refill[],refill_stack_top[];
+  LA_WRITE(0x88,(uint64)loong_refill & LA_PHYS_MASK);
+  LA_WRITE(0x31,(uint64)refill_stack_top);
+  LA_WRITE(0x180,LA_DIRECT|0x11);
+  LA_WRITE(0x181,0); LA_WRITE(0x182,0); LA_WRITE(0x183,0);
+  LA_WRITE(0x18,0); LA_WRITE(0x19,0); LA_WRITE(0x1e,PGSHIFT);
+  sfence_vma();
+  LA_WRITE(0x0,(LA_READ(0x0)&~31UL)|16);
+#else
   // wait for any previous writes to the page table memory to finish.
   sfence_vma();
 
@@ -81,6 +93,7 @@ kvminithart()
 
   // flush stale entries from the TLB.
   sfence_vma();
+#endif
 }
 
 // Return the address of the PTE in page table pagetable
