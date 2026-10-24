@@ -1,0 +1,135 @@
+{
+  "source_sha256": {
+    "context-entry.S": "ed324d1fded93a77f5254752a41e78a9c6225339aaecb9b461314b2de9326217",
+    "context-linker.ld": "ff52f946d46b7cda86ddf2ba38f6e4dbac0491af4af3c222a05c4d47248c2d3c",
+    "context-start.c": "c7719f1ffdbbe8c6ea5eeff811a7279f2dc1de1bcffa6c5972933a4ab985bbbc",
+    "context-switch.S": "4e1fdbc2d0408759f6e95239b9276dd63230b82772ac2153ec8e07b9889324aa",
+    "exception-linker.ld": "dc9a0916ccf18b48f5e2fc31a8fa5bde7f64dd4808d0c1da7756547dbc39e327",
+    "exception-start.c": "5dbbfb6b4b8a55909ebc631ff47b54559026784cd5a0bdffbc1543595ceb8cd9",
+    "exception-vector.S": "9aaff1932cda351d715ee739a23ebb3446d9ef07c506de1835a6c241c2776298",
+    "linker.ld": "255f1ee635150c24ce26ba301631b6620d66b5d9f93644f471cdcdb3760be538",
+    "Makefile": "04404c99f97a8c47ac5f56cf405815d56b7a47d55df46f1e9d3e1273f1843e16",
+    "memory-entry.S": "f694b8cdc914a603f2df3900e43a45b49b9183550206b32d0ac0a1cefdabbe1d",
+    "memory-host-test.c": "93cc271da49b88b06ea543c33036fb0263fa9c9aed9471c566ce8dfa16c574f7",
+    "memory-linker.ld": "7706b81c2555863d02cb4d4a7ac8f38b2ad9091bfee27fcfbf4ad6b10425dacf",
+    "memory-start.c": "526d0c13f1c292576f7487d09bd20c94b87e061f2a3bb34364c1c586ca2ad980",
+    "memory-test.c": "8fe89f6be13a7bb37dc451d2fbfbc7ef4cff99a259b77f5a0b2acd7148874bfc",
+    "page-allocator.c": "10c6e6a1cdbb2479df6f65dedbdb3a74b9fe1c661d09d6578b79f676c210a176",
+    "page-allocator.h": "bbce9f98b7bd54659271a34394614b92ab98c34b0e872af6985425d40233c581",
+    "return-linker.ld": "df332aa0ea5fa1199feb6a4f090077a5b7062505be6d6ae4512f14ebd14069d4",
+    "return-start.c": "b0509113af1066b611d2303feea3e5047ef30bab9556e0c4bf493bf96d657054",
+    "return-vector.S": "72cd2c74111000d74575bbc409d1b7029692b6c5acc74ab0e23bccbd8565eff1",
+    "start.c": "4941e121f902953171f34829fab6a752b6f2b986e01a58922aee6d57de6d2991",
+    "timer-start.c": "d63d59239ed997f39a541eac6c810e38aedae228da1840ef5bf7b9374561d7cd",
+    "timer-vector.S": "a8ae7780dc85c231dafadee3dbc9837365ea9aa2719c563bd0b52e5854ea79f2"
+  },
+  "results": [
+    {
+      "case": "memory-host",
+      "status": "PASS",
+      "command": [
+        "make",
+        "host-memory"
+      ]
+    },
+    {
+      "case": "all",
+      "status": "PASS",
+      "command": [
+        "/mnt/d/gpt_work/\u9ad8\u7ea7\u64cd\u4f5c\u7cfb\u7edf/tools/qemu-install/bin/qemu-system-loongarch64",
+        "-machine",
+        "virt",
+        "-smp",
+        "1",
+        "-m",
+        "2G",
+        "-nographic",
+        "-kernel",
+        "build/loongarch-probe.elf"
+      ]
+    },
+    {
+      "case": "exception",
+      "status": "PASS",
+      "command": [
+        "/mnt/d/gpt_work/\u9ad8\u7ea7\u64cd\u4f5c\u7cfb\u7edf/tools/qemu-install/bin/qemu-system-loongarch64",
+        "-machine",
+        "virt",
+        "-smp",
+        "1",
+        "-m",
+        "2G",
+        "-nographic",
+        "-kernel",
+        "build/exception-probe.elf"
+      ]
+    },
+    {
+      "case": "timer",
+      "status": "PASS",
+      "command": [
+        "/mnt/d/gpt_work/\u9ad8\u7ea7\u64cd\u4f5c\u7cfb\u7edf/tools/qemu-install/bin/qemu-system-loongarch64",
+        "-machine",
+        "virt",
+        "-smp",
+        "1",
+        "-m",
+        "2G",
+        "-nographic",
+        "-kernel",
+        "build/timer-probe.elf"
+      ]
+    },
+    {
+      "case": "return",
+      "status": "PASS",
+      "command": [
+        "/mnt/d/gpt_work/\u9ad8\u7ea7\u64cd\u4f5c\u7cfb\u7edf/tools/qemu-install/bin/qemu-system-loongarch64",
+        "-machine",
+        "virt",
+        "-smp",
+        "1",
+        "-m",
+        "2G",
+        "-nographic",
+        "-kernel",
+        "build/return-probe.elf"
+      ]
+    },
+    {
+      "case": "context",
+      "status": "PASS",
+      "command": [
+        "/mnt/d/gpt_work/\u9ad8\u7ea7\u64cd\u4f5c\u7cfb\u7edf/tools/qemu-install/bin/qemu-system-loongarch64",
+        "-machine",
+        "virt",
+        "-smp",
+        "1",
+        "-m",
+        "2G",
+        "-nographic",
+        "-kernel",
+        "build/context-probe.elf"
+      ]
+    },
+    {
+      "case": "memory",
+      "status": "PASS",
+      "command": [
+        "/mnt/d/gpt_work/\u9ad8\u7ea7\u64cd\u4f5c\u7cfb\u7edf/tools/qemu-install/bin/qemu-system-loongarch64",
+        "-machine",
+        "virt",
+        "-smp",
+        "1",
+        "-m",
+        "2G",
+        "-nographic",
+        "-kernel",
+        "build/memory-probe.elf"
+      ]
+    }
+  ],
+  "compiler": "loongarch64-unknown-linux-gnu-gcc (GCC) 13.0.0 20220906 (experimental)",
+  "qemu": "QEMU emulator version 7.2.22",
+  "runner_sha256": "b78130706ffc2c2bb84e55a643a3ab8e95ce942c83b645a0d972e67f92a79a84"
+}

@@ -1,0 +1,8 @@
+disk: begin (PCI VirtIO, synchronous D1)
+disk: dev=0x0000000000000001 modern=0x0000000000000001 ro=0x0000000000000000 bytes=0x0000000000800000
+disk: dev=0x0000000000000002 modern=0x0000000000000000 ro=0x0000000000000000 bytes=0x0000000000800000
+disk: dev=0x0000000000000003 modern=0x0000000000000001 ro=0x0000000000000001 bytes=0x0000000000800000
+disk: three devices capacity and initial bytes PASS
+disk: D1 unaligned RMW range RO root protection PASS
+disk: queue reuse and flush PASS
+disk: ALL PASS

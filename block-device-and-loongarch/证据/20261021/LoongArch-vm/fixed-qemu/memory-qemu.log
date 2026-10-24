@@ -1,0 +1,9 @@
+memory: begin (4 KiB pages, 1 MiB reserved pool)
+memory: initialization bounds PASS
+memory: alignment uniqueness zero-fill PASS
+memory: exhaustion PASS
+memory: page isolation PASS
+memory: invalid free and reinit rejection PASS
+memory: double free rejection and reuse clearing PASS
+memory: eight full allocation cycles PASS
+memory: ALL PASS
