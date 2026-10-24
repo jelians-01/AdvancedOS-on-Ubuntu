@@ -139,7 +139,11 @@ fat32_write_bytes(struct fat32_fs *fs, uint64 offset, const void *src,
 {
   if(offset > fs->volume_bytes || (uint64)length > fs->volume_bytes - offset)
     return -1;
-  return blk_write(fs->dev, offset, src, length);
+  if(blk_write(fs->dev, offset, src, length) < 0){
+    fs->write_failed = 1;
+    return -1;
+  }
+  return 0;
 }
 
 static int
@@ -1068,6 +1072,100 @@ done:
   return *out_node ? 0 : -1;
 }
 
+// Initialize one of the mandatory short-name directory entries in a newly
+// allocated directory cluster.  The cluster is zeroed by fat32_alloc_cluster,
+// so the remaining fields can stay zero.
+static int
+fat32_store_dot_entry(struct fat32_fs *fs, uint64 offset, const char *name,
+                      uint first_cluster)
+{
+  uchar short_name[11];
+
+  memset(short_name, ' ', sizeof(short_name));
+  short_name[0] = name[0];
+  if(name[1] != 0)
+    short_name[1] = name[1];
+  return fat32_store_entry(fs, offset, first_cluster, 0, short_name,
+                           FAT32_ATTR_DIR);
+}
+
+static int
+fat32_mkdir(void *data, const char *name, uint len)
+{
+  struct fat32_node *dir = data;
+  struct fat32_fs *fs = dir->fs;
+  struct fat32_entry entry;
+  uchar short_name[11];
+  uint64 slot_offset, cluster_offset;
+  uint tail = 0, new_parent_cluster = 0, child_cluster = 0;
+  uint parent_cluster;
+  int found, slot, r = -1;
+
+  if(len == 0 || len > VFS_NAME_MAX ||
+     fat32_short_name(name, len, short_name) < 0 ||
+     (dir->attributes & FAT32_ATTR_DIR) == 0)
+    return -1;
+
+  acquiresleep(&fs->write_lock);
+  acquiresleep(&dir->lock);
+  if(fs->write_failed)
+    goto done;
+
+  found = fat32_find_entry(dir, short_name, &entry);
+  if(found != 1)
+    goto done;
+
+  // FAT32 uses cluster 0 in the root directory's ".." entry.  Other
+  // directories point to their actual parent cluster.
+  parent_cluster = dir->first_cluster == fs->root_cluster ? 0 :
+                   dir->first_cluster;
+
+  // Allocate and initialize the child before publishing its parent entry.
+  if(fat32_append_cluster(fs, 0, &child_cluster) < 0 ||
+     fat32_cluster_offset(fs, child_cluster, &cluster_offset) < 0 ||
+     fat32_store_dot_entry(fs, cluster_offset, ".", child_cluster) < 0 ||
+     fat32_store_dot_entry(fs, cluster_offset + FAT32_ENTRY_SIZE, "..",
+                           parent_cluster) < 0)
+    goto rollback;
+
+  slot = fat32_find_slot(dir, &slot_offset, &tail);
+  if(slot < 0)
+    goto rollback;
+  if(slot == 1){
+    if(fat32_append_cluster(fs, tail, &new_parent_cluster) < 0 ||
+       fat32_cluster_offset(fs, new_parent_cluster, &slot_offset) < 0)
+      goto rollback;
+  }
+  if(fat32_store_entry(fs, slot_offset, child_cluster, 0, short_name,
+                       FAT32_ATTR_DIR) < 0){
+    // The directory entry may have reached disk partially. Leave its target
+    // clusters allocated and stop further writes until offline inspection.
+    fs->write_failed = 1;
+    goto done;
+  }
+  if(blk_flush(fs->dev) < 0){
+    fs->write_failed = 1;
+    goto done;
+  }
+  r = 0;
+  goto done;
+
+rollback:
+  if(new_parent_cluster != 0){
+    if(fat32_write_fat_value(fs, tail, FAT32_EOC) < 0){
+      fs->write_failed = 1;
+    } else if(fat32_free_chain(fs, new_parent_cluster) < 0){
+      fs->write_failed = 1;
+    }
+  }
+  if(child_cluster != 0 && fat32_free_chain(fs, child_cluster) < 0)
+    fs->write_failed = 1;
+done:
+  releasesleep(&dir->lock);
+  releasesleep(&fs->write_lock);
+  return r;
+}
+
 static int
 fat32_getattr(void *data, struct stat *st)
 {
@@ -1243,6 +1341,7 @@ static const struct vnode_ops fat32_node_ops = {
   .truncate_zero = fat32_truncate_zero,
   .lookup = fat32_lookup,
   .create_file = fat32_create_file,
+  .mkdir = fat32_mkdir,
   .readdir = fat32_readdir,
 };
 

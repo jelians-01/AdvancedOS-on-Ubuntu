@@ -123,6 +123,54 @@ test_write_create_truncate(void)
   close(fd);
 }
 
+static void
+test_mkdir_and_nested_write(void)
+{
+  static const char payload[] = "directory write works\n";
+  static const char deep_payload[] = "deeper\n";
+  struct vfs_dirent de;
+  struct stat st, parent_st;
+  int fd, r, found = 0;
+
+  check(mkdir("/fat/newdir") == 0, "create FAT32 directory");
+  check(mkdir("/fat/newdir") < 0, "reject duplicate FAT32 directory");
+  check(mkdir("/fat/newdir/inner") == 0,
+        "create nested FAT32 directory");
+  check(mkdir("/fat/newdir/inner") < 0,
+        "reject duplicate nested FAT32 directory");
+  check(stat("/fat/newdir", &parent_st) == 0 &&
+        stat("/fat/newdir/inner/..", &st) == 0 &&
+        st.type == T_DIR && st.ino == parent_st.ino,
+        "FAT32 dot-dot resolves to parent");
+  fd = open("/fat/newdir/child.txt", O_CREATE | O_RDWR);
+  check(fd >= 0, "create file in FAT32 directory");
+  check(write(fd, payload, sizeof(payload) - 1) == sizeof(payload) - 1,
+        "write file in FAT32 directory");
+  close(fd);
+  fd = open("/fat/newdir/inner/deep.txt", O_CREATE | O_RDWR);
+  check(fd >= 0 &&
+        write(fd, deep_payload, sizeof(deep_payload) - 1) ==
+          sizeof(deep_payload) - 1,
+        "write file in nested FAT32 directory");
+  close(fd);
+
+  fd = open("/fat/newdir", O_RDONLY);
+  check(fd >= 0, "open FAT32 directory");
+  while((r = readdir(fd, &de)) == 1)
+    if(strcmp(de.name, "CHILD.TXT") == 0)
+      found = 1;
+  close(fd);
+  check(r == 0 && found, "enumerate FAT32 child directory");
+
+  fd = open("/fat/newdir/child.txt", O_RDONLY);
+  check(fd >= 0 && fstat(fd, &st) == 0 && st.type == T_FILE &&
+        st.size == sizeof(payload) - 1, "stat nested FAT32 file");
+  close(fd);
+  fd = open("/fat/newdir/inner/../child.txt", O_RDONLY);
+  check(fd >= 0, "resolve FAT32 parent path component");
+  close(fd);
+}
+
 int
 main(void)
 {
@@ -133,6 +181,7 @@ main(void)
   test_fragmented();
   test_nested();
   test_write_create_truncate();
+  test_mkdir_and_nested_write();
   check(stat("/fat/empty.txt", &st) == 0 && st.size == 0,
         "empty file attributes");
   check(stat("/fat/late.txt", &st) == 0 && st.size == 0,

@@ -148,11 +148,17 @@ def check(out):
                            stderr=subprocess.PIPE)
     if hello.returncode or hello.stdout != b"hello from FAT32\n":
         raise AssertionError("host reader HELLO.TXT readback failed")
-    new_file = subprocess.run([str(FATLAB / "build/fat32_reader"), str(out / "fat32.img"),
-                               "cat", "/NEW.TXT"], stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE)
-    if new_file.returncode or new_file.stdout != b"ok\n":
-        raise AssertionError("host reader NEW.TXT write readback failed")
+    expected_files = {
+        "/NEW.TXT": b"ok\n",
+        "/NEWDIR/CHILD.TXT": b"directory write works\n",
+        "/NEWDIR/INNER/DEEP.TXT": b"deeper\n",
+    }
+    for path, expected in expected_files.items():
+        result = subprocess.run([str(FATLAB / "build/fat32_reader"),
+                                 str(out / "fat32.img"), "cat", path],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode or result.stdout != expected:
+            raise AssertionError(f"host reader {path} readback failed")
     print("PASS: FAT32 image writable, fsck.fat clean, host readback passed")
 
 
