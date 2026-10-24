@@ -111,6 +111,31 @@ vfs_fs_put(struct vfs_fs *fs)
     ops->release(data);
 }
 
+// Pin each instance while dropping the table lock for sleeping callbacks.
+// All callbacks run even after one fails, so another volume can still flush.
+int
+vfs_sync(void)
+{
+  struct vfs_fs *snapshot[NVFS];
+  int count = 0, result = 0;
+  acquire(&vtable.lock);
+  for(int i = 0; i < NVFS; i++){
+    struct vfs_fs *fs = &vtable.filesystems[i];
+    if(fs->ref > 0){
+      fs->ref++;
+      snapshot[count++] = fs;
+    }
+  }
+  release(&vtable.lock);
+  for(int i = 0; i < count; i++){
+    struct vfs_fs *fs = snapshot[i];
+    if(fs->ops->sync == 0 || fs->ops->sync(fs->data) < 0)
+      result = -1;
+    vfs_fs_put(fs);
+  }
+  return result;
+}
+
 struct vnode*
 vfs_fs_root(struct vfs_fs *fs)
 {

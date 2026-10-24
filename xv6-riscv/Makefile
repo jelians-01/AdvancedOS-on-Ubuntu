@@ -1,3 +1,7 @@
+ARCH ?= riscv
+ifeq ($(ARCH),loongarch)
+include Makefile.loongarch
+else ifeq ($(ARCH),riscv)
 K=kernel
 U=user
 
@@ -28,6 +32,8 @@ OBJS = \
   $K/vfs_mount_test.o \
   $K/vfs_xv6.o \
   $K/ext2.o \
+  $K/fat32.o \
+  $K/project_fs.o \
   $K/pipe.o \
   $K/exec.o \
   $K/sysfile.o \
@@ -136,6 +142,7 @@ mkfs/mkfs: mkfs/mkfs.c $K/fs.h $K/param.h
 .PRECIOUS: %.o
 
 UPROGS=\
+	$U/_archtest\
 	$U/_cat\
 	$U/_echo\
 	$U/_forktest\
@@ -153,6 +160,17 @@ UPROGS=\
 	$U/_vfsexec\
 	$U/_vfsdir\
 	$U/_ext2test\
+	$U/_ext2write\
+	$U/_ext2single\
+	$U/_ext2dirgrow\
+	$U/_fat32test\
+	$U/_fat32persist\
+	$U/_fat32missing\
+	$U/_testrun\
+	$U/_threefstest\
+	$U/_vfstest1\
+	$U/_vfstest2\
+	$U/_sync\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
@@ -217,3 +235,7 @@ check-qemu-version:
 		echo "ERROR: Need qemu version >= $(MIN_QEMU_VERSION)"; \
 		exit 1; \
 	fi
+
+else
+$(error unsupported ARCH=$(ARCH))
+endif

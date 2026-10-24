@@ -54,6 +54,10 @@ struct vfs_fs_ops {
   // Optional for static private data. Called after the last instance/node ref.
   // May sleep; no VFS table lock is held. Not a sync/flush guarantee.
   void (*release)(void *data);
+  // Flush completed backend updates and the device; return 0/-1.
+  // Borrow private data, no outer node/table lock or transaction.
+  // Serializes with backend writers; not a cross-filesystem snapshot.
+  int (*sync)(void *data);
 };
 
 // Create one instance reference, or 0 if invalid/full. No disk I/O.

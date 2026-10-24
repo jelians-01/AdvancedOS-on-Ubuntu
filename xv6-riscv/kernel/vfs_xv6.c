@@ -416,8 +416,15 @@ native_root(void *data, void **out_node)
   return 0;
 }
 
+static int
+native_sync(void *data)
+{
+  return *(uint *)data == ROOTDEV ? log_sync() : -1;
+}
+
 static const struct vfs_fs_ops native_fs_ops = {
   .root = native_root,
+  .sync = native_sync,
   // Static private data needs no destructor; the root mount retains it.
 };
 

@@ -5,6 +5,7 @@ struct vfs_dirent;
 
 // system calls
 int fork(void);
+int sync(void);
 int exit(int) __attribute__((noreturn));
 int wait(int*);
 int pipe(int*);

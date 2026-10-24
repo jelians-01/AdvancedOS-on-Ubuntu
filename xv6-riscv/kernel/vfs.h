@@ -17,6 +17,8 @@ struct vfs_dirent;
 
 // Initialize VFS memory state; no disk I/O.
 void vfs_init(void);
+// Sync live instances; no outer lock/transaction. Any failure is -1.
+int vfs_sync(void);
 
 // Caller already owns an instance reference. dup does not sleep.
 // put consumes one reference and may sleep; no spinlock/node lock/transaction.

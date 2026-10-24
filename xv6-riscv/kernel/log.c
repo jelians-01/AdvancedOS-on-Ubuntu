@@ -6,6 +6,7 @@
 #include "sleeplock.h"
 #include "fs.h"
 #include "buf.h"
+#include "blkdev.h"
 
 // Simple logging that allows concurrent FS system calls.
 //
@@ -173,6 +174,27 @@ end_op(void)
     wakeup(&log);
     release(&log.lock);
   }
+}
+
+// Wait for active native operations, then exclude new transactions through
+// the device flush. No log spinlock is held across disk I/O.
+int
+log_sync(void)
+{
+  acquire(&log.lock);
+  while(log.outstanding != 0 || log.committing)
+    sleep(&log, &log.lock);
+  log.committing = 1;
+  release(&log.lock);
+
+  commit();
+  int result = blk_flush(log.dev);
+
+  acquire(&log.lock);
+  log.committing = 0;
+  wakeup(&log);
+  release(&log.lock);
+  return result;
 }
 
 // Copy modified blocks from cache to log.
