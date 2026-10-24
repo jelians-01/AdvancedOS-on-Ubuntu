@@ -387,10 +387,10 @@ ext2_lock(void *data)
 {
   struct ext2_inode *ip = data;
   acquiresleep(&ip->lock);
-  if(!ip->valid && ext2_read_inode(ip) < 0){
-    releasesleep(&ip->lock);
-    panic("ext2 inode read");
-  }
+  // The lock callback has no error return. Keep the lock held and leave
+  // valid clear; read/getattr report an ordinary error to VFS instead.
+  if(!ip->valid)
+    ext2_read_inode(ip);
 }
 
 static void
@@ -402,7 +402,10 @@ ext2_unlock(void *data)
 static int
 ext2_read_at(void *data, int user_dst, uint64 dst, uint off, uint n)
 {
-  return ext2_read_at_locked(data, user_dst, dst, off, n);
+  struct ext2_inode *ip = data;
+  if(!ip->valid)
+    return -1;
+  return ext2_read_at_locked(ip, user_dst, dst, off, n);
 }
 
 static int
@@ -420,7 +423,7 @@ ext2_getattr(void *data, struct stat *st)
 {
   struct ext2_inode *ip = data;
   int type = ext2_type(ip->mode);
-  if(type == 0)
+  if(!ip->valid || type == 0)
     return -1;
   memset(st, 0, sizeof(*st));
   st->dev = ip->fs->dev;
@@ -1135,8 +1138,21 @@ static const struct vnode_ops ext2_node_ops = {
   .create_file = ext2_create_file,
 };
 
+static int
+ext2_sync(void *data)
+{
+  struct ext2_fs *fs = data;
+  acquiresleep(&fs->write_lock);
+  int r = fs->write_failed ? -1 : blk_flush(fs->dev);
+  if(r < 0)
+    fs->write_failed = 1;
+  releasesleep(&fs->write_lock);
+  return r;
+}
+
 static const struct vfs_fs_ops ext2_fs_ops = {
   .root = ext2_root,
+  .sync = ext2_sync,
   .release = kfree,
 };
 
