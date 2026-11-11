@@ -90,12 +90,13 @@ int vfs_xv6_lookup_path(const char *path, struct vfs_path *out);
 // Native compatibility: an existing device can satisfy O_CREATE.
 int vfs_xv6_create_file(const char *path, struct vfs_path *out);
 
-// Native-only path bridges for mkdir/mknod. No outer lock/transaction.
+// VFS path bridges for mkdir/mknod. Backends may reject unsupported operations.
+// No outer lock/transaction.
 // Return 0/-1; no reference is transferred to the caller.
 int vfs_xv6_mkdir(const char *path);
 int vfs_xv6_mknod(const char *path, int major, int minor);
 
-// Native-only link/unlink path bridges; no outer locks/transaction.
+// VFS link/unlink path bridges; no outer locks/transaction.
 // Return 0/-1; resolve and release all temporary VFS references internally.
 int vfs_xv6_link(const char *oldpath, const char *newpath);
 int vfs_xv6_unlink(const char *path);

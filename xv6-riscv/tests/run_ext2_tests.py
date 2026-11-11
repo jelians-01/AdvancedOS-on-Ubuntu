@@ -96,7 +96,7 @@ def super_free(image):
     return [int.from_bytes(data[:4], 'little'), int.from_bytes(data[4:], 'little')]
 
 
-def guest(out, name, commands, readonly=False, image='ext2.img'):
+def guest(out, name, commands, readonly=False, image='ext2.img', fat_image=None):
     qemu = os.environ.get('XV6_QEMU', 'qemu-system-riscv64')
     args = [qemu, '-machine', 'virt', '-bios', 'none', '-kernel', str(out / 'kernel'),
             '-m', '128M', '-smp', '3', '-display', 'none', '-serial', 'stdio',
@@ -107,6 +107,9 @@ def guest(out, name, commands, readonly=False, image='ext2.img'):
             drive += ',readonly=on'
         args += ['-drive', drive, '-device',
                  f'virtio-blk-device,drive=d{slot},bus=virtio-mmio-bus.{slot}']
+    if fat_image is not None:
+        args += ['-drive', f'file={out / fat_image},if=none,format=raw,id=d2,cache=writeback',
+                 '-device', 'virtio-blk-device,drive=d2,bus=virtio-mmio-bus.2']
     p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     poller = selectors.DefaultSelector()
     poller.register(p.stdout, selectors.EVENT_READ)
@@ -286,9 +289,129 @@ def check(out):
     print('EXT2 WRITE TEST MATRIX PASSED', flush=True)
 
 
+def mkdir_prepare(out):
+    out.mkdir(parents=True, exist_ok=False)
+    for name in ('kernel/kernel', 'fs.img'):
+        shutil.copyfile(SOURCE / name, out / Path(name).name)
+    log = out / 'prepare.log'
+    image = out / 'ext2.img'
+    with image.open('xb') as stream:
+        stream.truncate(32 * 1024 * 1024)
+    command(['mke2fs', '-t', 'ext2', '-F', '-b', '1024', '-I', '128',
+             '-O', 'none', image], log)
+    command(['debugfs', '-w', '-R', 'mkdir /seed', image], log)
+    seed = out / 'seed.txt'
+    seed.write_bytes(b'seed unchanged\n')
+    command(['debugfs', '-w', '-R', f'write {seed} /seed/keep.txt', image], log)
+    (out / 'mkdir-initial-free.json').write_text(json.dumps(super_free(image)))
+
+
+def mkdir_run(out):
+    guest(out, 'mkdir', [('ext2mkdir', 'ext2mkdir: PASS')])
+
+
+def mkdir_check(out):
+    image = out / 'ext2.img'
+    log = out / 'check.log'
+    command(['e2fsck', '-fn', image], log)
+    expected = {
+        '/tree/inner/data.bin': b'XYZ' + bytes(i % 251 for i in range(3, 13000)),
+        '/tree/short': b'ok\n',
+        '/seed/keep.txt': b'seed unchanged\n',
+        '/seed/new.txt': b'new in imported directory\n',
+    }
+    for i, (path, contents) in enumerate(expected.items()):
+        target = out / f'export-mkdir-{i}'
+        command(['debugfs', '-R', f'dump {path} {target}', image], log)
+        if target.read_bytes() != contents:
+            raise AssertionError(f'host readback failed: {path}')
+    before = json.loads((out / 'mkdir-initial-free.json').read_text())
+    after = super_free(image)
+    # Two directories + directory expansion + 13 data/1 index + 2 small files.
+    # Two directories + 3 files + 14 empty directory-growth fixtures.
+    if [before[i] - after[i] for i in range(2)] != [19, 19]:
+        raise AssertionError(f'unexpected allocation counters: {before} -> {after}')
+    print('PASS: ext2 nested mkdir, host readback, allocation counts and e2fsck clean')
+
+
+def unlink_prepare(out):
+    mkdir_prepare(out)
+    log = out / 'prepare.log'
+    image = out / 'ext2.img'
+    command(['debugfs', '-w', '-R', 'ln /seed/keep.txt /seed/other.txt', image], log)
+    command(['debugfs', '-w', '-R', 'set_inode_field /seed/keep.txt links_count 2',
+             image], log)
+
+
+def unlink_run(out):
+    guest(out, 'unlink', [('ext2unlink', 'ext2unlink: PASS')])
+
+
+def unlink_check(out):
+    image = out / 'ext2.img'
+    log = out / 'check.log'
+    command(['e2fsck', '-fn', image], log)
+    before = json.loads((out / 'mkdir-initial-free.json').read_text())
+    if super_free(image) != before:
+        raise AssertionError(f'blocks or inodes leaked: {before} -> {super_free(image)}')
+    target = out / 'export-unlink-keep'
+    command(['debugfs', '-R', f'dump /seed/keep.txt {target}', image], log)
+    if target.read_bytes() != b'seed unchanged\n':
+        raise AssertionError('remaining hard link lost its data')
+    listing = command(['debugfs', '-R', 'ls -l /', image], log).decode()
+    if re.search(r'\bremove\b', listing):
+        raise AssertionError('deleted directory still appears in root')
+    print('PASS: ext2 unlink, all allocation counts restored, host data and e2fsck clean')
+
+
+def link_prepare(out):
+    mkdir_prepare(out)
+
+
+def link_run(out):
+    guest(out, 'link', [('ext2link', 'ext2link: PASS')])
+
+
+def link_check(out):
+    image = out / 'ext2.img'
+    log = out / 'check.log'
+    command(['e2fsck', '-fn', image], log)
+    before = json.loads((out / 'mkdir-initial-free.json').read_text())
+    after = super_free(image)
+    if [before[i] - after[i] for i in range(2)] != [14, 1]:
+        raise AssertionError(f'hard links leaked allocations: {before} -> {after}')
+    expected = b'XYZ' + bytes(i % 251 for i in range(3, 13000))
+    inodes = []
+    for i, path in enumerate(('/keep-a', '/seed/keep-b')):
+        target = out / f'export-link-{i}'
+        command(['debugfs', '-R', f'dump {path} {target}', image], log)
+        if target.read_bytes() != expected:
+            raise AssertionError(f'hard-link data mismatch: {path}')
+        info = command(['debugfs', '-R', f'stat {path}', image], log).decode()
+        inodes.append(re.search(r'Inode:\s+(\d+)', info).group(1))
+        if not re.search(r'Links:\s+2\b', info):
+            raise AssertionError(f'wrong hard-link count: {path}')
+    if inodes[0] != inodes[1]:
+        raise AssertionError('hard links refer to different inodes')
+    seed = out / 'export-link-seed'
+    command(['debugfs', '-R', f'dump /seed/keep.txt {seed}', image], log)
+    if seed.read_bytes() != b'seed unchanged\n':
+        raise AssertionError('preexisting file changed')
+    print('PASS: ext2 hard links, shared inode/data, exact allocation counts and e2fsck clean')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('phase', choices=('prepare', 'run', 'check'))
     parser.add_argument('out', type=Path)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--mkdir', action='store_true',
+                      help='run only one nested directory creation scenario')
+    mode.add_argument('--unlink', action='store_true',
+                      help='run only one unlink and deferred reclamation scenario')
+    mode.add_argument('--link', action='store_true',
+                      help='run only one hard-link creation and lifecycle scenario')
     options = parser.parse_args()
-    globals()[options.phase](options.out.resolve())
+    prefix = ('mkdir_' if options.mkdir else 'unlink_' if options.unlink else
+              'link_' if options.link else '')
+    globals()[prefix + options.phase](options.out.resolve())

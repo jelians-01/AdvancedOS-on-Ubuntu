@@ -28,6 +28,8 @@
 #define EXT2_NDIR_BLOCKS 12
 #define EXT2_N_BLOCKS 15
 #define EXT2_DIRENT_HEADER 8
+// Keep positive link counts representable in the shared signed-short stat ABI.
+#define EXT2_LINK_MAX 0x7fff
 
 struct ext2_fs {
   uint dev;
@@ -46,6 +48,7 @@ struct ext2_fs {
   uint first_ino;
   int writable;
   int write_failed;
+  uint orphans; // Unlinked inodes pinned by open references; keep the volume dirty.
   // Mutations take this before any inode lock; readers take inode locks only.
   struct sleeplock write_lock;
 };
@@ -55,6 +58,7 @@ struct ext2_inode {
   uint inum;
   int refs;
   int valid;
+  int orphan;
   struct sleeplock lock;
   ushort mode;
   ushort links;
@@ -74,6 +78,7 @@ static struct {
 
 static const struct vnode_ops ext2_node_ops;
 static const struct vfs_fs_ops ext2_fs_ops;
+static int ext2_reclaim_inode(struct ext2_inode *ip);
 
 static ushort
 get16(const uchar *p)
@@ -215,6 +220,7 @@ ext2_iget(struct ext2_fs *fs, uint inum)
     empty->inum = inum;
     empty->refs = 1;
     empty->valid = 0;
+    empty->orphan = 0;
   }
   release(&ext2_cache.lock);
   return empty;
@@ -434,7 +440,21 @@ ext2_getattr(void *data, struct stat *st)
 static void
 ext2_release(void *data)
 {
-  ext2_iput(data);
+  struct ext2_inode *ip = data;
+  struct ext2_fs *fs = ip->fs;
+  int last;
+  acquiresleep(&fs->write_lock);
+  acquire(&ext2_cache.lock);
+  last = ip->refs == 1;
+  release(&ext2_cache.lock);
+  if(last && ip->orphan && !fs->write_failed){
+    acquiresleep(&ip->lock);
+    if(ext2_reclaim_inode(ip) < 0)
+      fs->write_failed = 1;
+    releasesleep(&ip->lock);
+  }
+  ext2_iput(ip);
+  releasesleep(&fs->write_lock);
 }
 
 static int
@@ -447,7 +467,7 @@ ext2_root(void *data, void **out_node)
 
 static int
 ext2_find_entry(struct ext2_inode *dir, const char *name, uint len,
-                uint *inum, uchar *type)
+                uint *inum, uint64 *offset)
 {
   struct ext2_fs *fs = dir->fs;
   uint64 size = ext2_inode_size(dir);
@@ -480,8 +500,8 @@ ext2_find_entry(struct ext2_inode *dir, const char *name, uint len,
       if(entry_ino && name_len == len &&
          memcmp(buf + pos + EXT2_DIRENT_HEADER, name, len) == 0){
         *inum = entry_ino;
-        if(type)
-          *type = fs->dirent_has_type ? buf[pos + 7] : 0;
+        if(offset)
+          *offset = off + pos;
         result = 0;
         goto done;
       }
@@ -506,16 +526,22 @@ ext2_lookup(void *data, const char *name, uint len, void **out_node)
   int found;
 
   *out_node = 0;
+  // Pin the inode before unlink can remove its name and recycle its number.
+  acquiresleep(&dir->fs->write_lock);
   acquiresleep(&dir->lock);
   if(!dir->valid && ext2_read_inode(dir) < 0){
     releasesleep(&dir->lock);
+    releasesleep(&dir->fs->write_lock);
     return -1;
   }
   found = ext2_find_entry(dir, name, len, &inum, 0);
   releasesleep(&dir->lock);
-  if(found != 0)
+  if(found != 0){
+    releasesleep(&dir->fs->write_lock);
     return -1;
+  }
   child = ext2_iget(dir->fs, inum);
+  releasesleep(&dir->fs->write_lock);
   if(child == 0)
     return -1;
   *out_node = child;
@@ -630,7 +656,7 @@ ext2_write_state(struct ext2_fs *fs, int clean)
     return -1;
   }
   if(ext2_read_bytes(fs, EXT2_SUPER_OFFSET, sb, EXT2_SUPER_SIZE) == 0){
-    put16(sb + 58, clean ? 1 : 0);
+    put16(sb + 58, clean && fs->orphans == 0 ? 1 : 0);
     r = ext2_write_bytes(fs, EXT2_SUPER_OFFSET, sb, EXT2_SUPER_SIZE);
     if(r == 0)
       r = blk_flush(fs->dev);
@@ -664,6 +690,7 @@ ext2_store_inode(struct ext2_inode *ip, uchar *raw)
      ext2_read_bytes(ip->fs, off, raw, ip->fs->inode_size) < 0)
     return -1;
   put32(raw + 4, ip->size_lo);
+  put16(raw + 26, ip->links);
   put32(raw + 28, ip->sectors);
   for(int i = 0; i < EXT2_N_BLOCKS; i++)
     put32(raw + 40 + 4 * i, ip->blocks[i]);
@@ -744,7 +771,7 @@ ext2_simple_file(struct ext2_inode *ip)
   uint sectors = 0;
   uchar *indirect = 0;
   uint n = ip->fs->block_size / 4;
-  if((ip->mode & EXT2_S_IFMT) != EXT2_S_IFREG || ip->links == 0 ||
+  if((ip->mode & EXT2_S_IFMT) != EXT2_S_IFREG ||
      ip->flags || ip->file_acl || ip->size_hi ||
      ip->size_lo > (EXT2_NDIR_BLOCKS + n) * ip->fs->block_size ||
      ip->blocks[13] || ip->blocks[14])
@@ -810,7 +837,7 @@ ext2_write_at(void *data, int user_src, uint64 src, uint off, uint n)
   acquiresleep(&fs->write_lock);
   acquiresleep(&ip->lock);
   if(!fs->writable || fs->write_failed ||
-     (!ip->valid && ext2_read_inode(ip) < 0) || !ext2_simple_file(ip) ||
+     (!ip->valid && ext2_read_inode(ip) < 0) || ip->links == 0 || !ext2_simple_file(ip) ||
      off > ip->size_lo || off > max || n > max - off)
     goto done;
   if(n == 0){ r = 0; goto done; }
@@ -918,7 +945,7 @@ ext2_truncate_zero(void *data)
   acquiresleep(&ip->lock);
   raw = kalloc();
   if(raw == 0 || !fs->writable || fs->write_failed ||
-     (!ip->valid && ext2_read_inode(ip) < 0) || !ext2_simple_file(ip) ||
+     (!ip->valid && ext2_read_inode(ip) < 0) || ip->links == 0 || !ext2_simple_file(ip) ||
      ext2_write_state(fs, 0) < 0)
     goto done;
   started = 1;
@@ -975,16 +1002,40 @@ done:
   return r;
 }
 
-// Prepare a root directory slot entirely in memory before allocating resources.
+static int
+ext2_simple_dir(struct ext2_inode *dir)
+{
+  struct ext2_fs *fs = dir->fs;
+  if((dir->mode & EXT2_S_IFMT) != EXT2_S_IFDIR ||
+     dir->flags || dir->file_acl || dir->size_hi || dir->size_lo == 0 ||
+     dir->size_lo % fs->block_size ||
+     dir->size_lo > EXT2_NDIR_BLOCKS * fs->block_size)
+    return 0;
+  uint count = dir->size_lo / fs->block_size;
+  if(dir->sectors != count * (fs->block_size / 512))
+    return 0;
+  for(uint i = 0; i < count; i++){
+    if(dir->blocks[i] < fs->first_data_block || dir->blocks[i] >= fs->blocks_count)
+      return 0;
+    for(uint j = 0; j < i; j++)
+      if(dir->blocks[i] == dir->blocks[j])
+        return 0;
+  }
+  for(uint i = count; i < EXT2_N_BLOCKS; i++)
+    if(dir->blocks[i]) return 0;
+  return 1;
+}
+
+// Prepare a directory slot entirely in memory before allocating resources.
 // Return 1 for an additional direct block, 0 for an existing slot, -1 on error.
 static int
 ext2_dir_slot(struct ext2_inode *dir, uint len, uchar *buf, uint *block, uint *slot)
 {
   struct ext2_fs *fs = dir->fs;
   uint need = (EXT2_DIRENT_HEADER + len + 3) & ~3u;
-  if(dir->inum != EXT2_ROOT_INO || (dir->mode & EXT2_S_IFMT) != EXT2_S_IFDIR ||
-     dir->flags || dir->file_acl || dir->size_hi || dir->size_lo % fs->block_size)
+  if(dir->links < 2 || !ext2_simple_dir(dir))
     return -1;
+  uint count = dir->size_lo / fs->block_size;
   for(uint base = 0; base < dir->size_lo; base += fs->block_size){
     if(ext2_map_block(dir, base / fs->block_size, block) < 0 || *block == 0 ||
        ext2_read_block(fs, *block, buf) < 0)
@@ -1008,12 +1059,8 @@ ext2_dir_slot(struct ext2_inode *dir, uint len, uchar *buf, uint *block, uint *s
       pos += rec;
     }
   }
-  uint count = dir->size_lo / fs->block_size;
-  if(count == 0 || count >= EXT2_NDIR_BLOCKS ||
-     dir->sectors != count * (fs->block_size / 512))
+  if(count >= EXT2_NDIR_BLOCKS)
     return -1;
-  for(uint i = count; i < EXT2_N_BLOCKS; i++)
-    if(dir->blocks[i]) return -1;
   memset(buf, 0, fs->block_size);
   *block = 0;
   *slot = 0;
@@ -1021,13 +1068,31 @@ ext2_dir_slot(struct ext2_inode *dir, uint len, uchar *buf, uint *block, uint *s
   return 1;
 }
 
+// Maintain bg_used_dirs_count when allocating or finally reclaiming a directory.
 static int
-ext2_create_file(void *data, const char *name, uint len, void **out_node)
+ext2_directory_count(struct ext2_fs *fs, uint inum, int delta)
+{
+  uchar gd[32];
+  uint group = (inum - 1) / fs->inodes_per_group;
+  uint64 off = (uint64)(fs->first_data_block + 1) * fs->block_size + group * 32;
+  if(ext2_read_bytes(fs, off, gd, sizeof(gd)) < 0 ||
+     (delta > 0 && get16(gd + 16) == 0xffff) ||
+     (delta < 0 && get16(gd + 16) == 0)){
+    fs->write_failed = 1;
+    return -1;
+  }
+  put16(gd + 16, get16(gd + 16) + delta);
+  return ext2_write_bytes(fs, off, gd, sizeof(gd));
+}
+
+static int
+ext2_create_node(void *data, const char *name, uint len, int is_dir,
+                   void **out_node)
 {
   struct ext2_inode *dir = data, *child = 0;
   struct ext2_fs *fs = dir->fs;
-  uchar *buf = 0, *raw = 0;
-  uint inum = 0, block, slot;
+  uchar *buf = 0, *raw = 0, *dots = 0;
+  uint inum = 0, block, slot, child_block = 0, parent_block = 0;
   uint64 inode_off;
   int r = -1, started = 0, found, grow, ar;
   *out_node = 0;
@@ -1039,11 +1104,11 @@ ext2_create_file(void *data, const char *name, uint len, void **out_node)
   acquiresleep(&fs->write_lock);
   acquiresleep(&dir->lock);
   if(!fs->writable || fs->write_failed ||
-     (!dir->valid && ext2_read_inode(dir) < 0))
+     (!dir->valid && ext2_read_inode(dir) < 0) || dir->links < 2)
     goto done;
   found = ext2_find_entry(dir, name, len, &inum, 0);
   if(found == 0){
-    if(inum == dir->inum) goto done;
+    if(is_dir || inum == dir->inum) goto done;
     child = ext2_iget(fs, inum);
     if(child == 0) goto done;
     acquiresleep(&child->lock);
@@ -1054,8 +1119,12 @@ ext2_create_file(void *data, const char *name, uint len, void **out_node)
     goto done;
   }
   if(found < 0) goto done;
+  if(is_dir && dir->links == 0xffff)
+    goto done;
+  inum = 0;
   buf = kalloc(); raw = kalloc();
-  if(buf == 0 || raw == 0)
+  if(is_dir) dots = kalloc();
+  if(buf == 0 || raw == 0 || (is_dir && dots == 0))
     goto done;
   grow = ext2_dir_slot(dir, len, buf, &block, &slot);
   if(grow < 0 || ext2_write_state(fs, 0) < 0)
@@ -1067,54 +1136,382 @@ ext2_create_file(void *data, const char *name, uint len, void **out_node)
     goto done;
   }
   child = ext2_iget(fs, inum);
-  if(child == 0){
-    if(ext2_bitmap(fs, 1, &inum, 0) != 0) fs->write_failed = 1;
-    goto done;
-  }
-  if(grow){
-    ar = ext2_bitmap(fs, 0, &block, 1);
+  if(child == 0)
+    goto rollback;
+  if(is_dir){
+    ar = ext2_bitmap(fs, 0, &child_block, 1);
     if(ar != 0){
-      // The inode is still unpublished. ENOSPC must return its reservation;
-      // an I/O error instead leaves the volume dirty for offline repair.
-      if(ar < 0 || ext2_bitmap(fs, 1, &inum, 0) != 0)
-        fs->write_failed = 1;
-      goto done;
+      if(ar < 0) fs->write_failed = 1;
+      goto rollback;
     }
   }
+  if(grow){
+    ar = ext2_bitmap(fs, 0, &parent_block, 1);
+    if(ar != 0){
+      if(ar < 0) fs->write_failed = 1;
+      goto rollback;
+    }
+    block = parent_block;
+  }
+  if(is_dir){
+    memset(dots, 0, fs->block_size);
+    put32(dots, inum);
+    put16(dots + 4, 12);
+    put16(dots + 6, 1);
+    dots[8] = '.';
+    put32(dots + 12, dir->inum);
+    put16(dots + 16, fs->block_size - 12);
+    put16(dots + 18, 2);
+    dots[20] = dots[21] = '.';
+    if(ext2_write_block(fs, child_block, dots) < 0)
+      goto rollback;
+  }
   memset(raw, 0, fs->inode_size);
-  put16(raw, EXT2_S_IFREG | 0644);
-  put16(raw + 26, 1);
+  put16(raw, is_dir ? EXT2_S_IFDIR | 0755 : EXT2_S_IFREG | 0644);
+  put16(raw + 26, is_dir ? 2 : 1);
+  if(is_dir){
+    put32(raw + 4, fs->block_size);
+    put32(raw + 28, fs->block_size / 512);
+    put32(raw + 40, child_block);
+  }
   if(ext2_inode_offset(fs, inum, &inode_off) < 0 ||
      ext2_write_bytes(fs, inode_off, raw, fs->inode_size) < 0){
     fs->write_failed = 1;
     goto done;
   }
+  if(is_dir && ext2_directory_count(fs, inum, 1) < 0)
+    goto done;
   put32(buf + slot, inum);
   put16(buf + slot + 6, len);
   memmove(buf + slot + EXT2_DIRENT_HEADER, name, len);
   r = ext2_write_block(fs, block, buf);
-  if(r == 0 && grow){
+  if(r == 0 && (grow || is_dir)){
     uint old_size = dir->size_lo, old_sectors = dir->sectors;
+    ushort old_links = dir->links;
     uint new_index = old_size / fs->block_size;
     // Publish a fully initialized directory block while holding both locks.
     // Readers cannot see a larger directory until its inode is stored.
-    dir->blocks[new_index] = block;
-    dir->size_lo += fs->block_size;
-    dir->sectors += fs->block_size / 512;
+    if(grow){
+      dir->blocks[new_index] = block;
+      dir->size_lo += fs->block_size;
+      dir->sectors += fs->block_size / 512;
+    }
+    if(is_dir)
+      dir->links++;
     r = ext2_store_inode(dir, raw);
     if(r < 0){
       // A failed device write leaves the volume dirty, but keep cached state
       // aligned with the last metadata state we know was fully written.
-      dir->blocks[new_index] = 0;
+      if(grow)
+        dir->blocks[new_index] = 0;
       dir->size_lo = old_size;
       dir->sectors = old_sectors;
+      dir->links = old_links;
       fs->write_failed = 1;
     }
+  }
+  goto done;
+
+rollback:
+  // Only unpublished reservations can be reclaimed. Device errors may have
+  // partially stored metadata, so leave the volume dirty for offline repair.
+  if(!fs->write_failed){
+    if((parent_block && ext2_bitmap(fs, 0, &parent_block, 0) != 0) ||
+       (child_block && ext2_bitmap(fs, 0, &child_block, 0) != 0) ||
+       (inum && ext2_bitmap(fs, 1, &inum, 0) != 0))
+      fs->write_failed = 1;
   }
 done:
   if(started && ext2_write_state(fs, 1) < 0) r = -1;
   if(r == 0) *out_node = child;
   else if(child) ext2_iput(child);
+  if(buf) kfree(buf);
+  if(raw) kfree(raw);
+  if(dots) kfree(dots);
+  releasesleep(&dir->lock);
+  releasesleep(&fs->write_lock);
+  return r;
+}
+
+static int
+ext2_create_file(void *data, const char *name, uint len, void **out_node)
+{
+  return ext2_create_node(data, name, len, 0, out_node);
+}
+
+static int
+ext2_mkdir(void *data, const char *name, uint len)
+{
+  void *child = 0;
+  int r = ext2_create_node(data, name, len, 1, &child);
+  if(child)
+    ext2_iput(child);
+  return r;
+}
+
+// Called only at the last backend reference, with write_lock and inode lock.
+// Detach and flush the inode before freeing any of its blocks.
+static int
+ext2_reclaim_inode(struct ext2_inode *ip)
+{
+  struct ext2_fs *fs = ip->fs;
+  uchar *raw = 0, *indirect = 0;
+  uint old[EXT2_N_BLOCKS], inum = ip->inum;
+  uint64 inode_off;
+  int is_dir = (ip->mode & EXT2_S_IFMT) == EXT2_S_IFDIR, r = -1;
+
+  if(!fs->writable || fs->write_failed || !ip->valid || ip->links != 0 ||
+     !ip->orphan || fs->orphans == 0 ||
+     (is_dir ? !ext2_simple_dir(ip) : !ext2_simple_file(ip)))
+    return -1;
+  raw = kalloc();
+  if(raw == 0)
+    goto done;
+  memmove(old, ip->blocks, sizeof(old));
+  if(old[12]){
+    indirect = kalloc();
+    if(indirect == 0 || ext2_read_block(fs, old[12], indirect) < 0)
+      goto done;
+  }
+  if(ext2_write_state(fs, 0) < 0)
+    goto done;
+  memset(ip->blocks, 0, sizeof(ip->blocks));
+  ip->size_lo = ip->size_hi = ip->sectors = 0;
+  if(ext2_store_inode(ip, raw) < 0 ||
+     ext2_inode_offset(fs, inum, &inode_off) < 0)
+    goto done;
+  // Return a zeroed inode slot. Small synthetic i_dtime values can be
+  // interpreted as orphan-chain inode numbers by ext filesystem checkers.
+  memset(raw, 0, fs->inode_size);
+  if(ext2_write_bytes(fs, inode_off, raw, fs->inode_size) < 0 ||
+     blk_flush(fs->dev) < 0)
+    goto done;
+  for(uint i = 0; i < EXT2_NDIR_BLOCKS; i++)
+    if(old[i] && ext2_bitmap(fs, 0, &old[i], 0) != 0)
+      goto done;
+  if(old[12]){
+    for(uint i = 0; i < fs->block_size / 4; i++){
+      uint block = get32(indirect + i * 4);
+      if(block && ext2_bitmap(fs, 0, &block, 0) != 0)
+        goto done;
+    }
+    if(ext2_bitmap(fs, 0, &old[12], 0) != 0)
+      goto done;
+  }
+  if((is_dir && ext2_directory_count(fs, inum, -1) < 0) ||
+     ext2_bitmap(fs, 1, &inum, 0) != 0)
+    goto done;
+  fs->orphans--;
+  ip->orphan = 0;
+  r = ext2_write_state(fs, 1);
+done:
+  if(raw) kfree(raw);
+  if(indirect) kfree(indirect);
+  return r;
+}
+
+// Empty means exactly one valid "." and "..", allowing unused records.
+static int
+ext2_directory_empty(struct ext2_inode *ip, uint parent)
+{
+  struct ext2_fs *fs = ip->fs;
+  uchar *buf = kalloc();
+  int dot = 0, dotdot = 0, r = -1;
+  if(buf == 0 || !ext2_simple_dir(ip))
+    goto done;
+  for(uint off = 0; off < ip->size_lo; off += fs->block_size){
+    if(ext2_read_block(fs, ip->blocks[off / fs->block_size], buf) < 0)
+      goto done;
+    for(uint pos = 0; pos < fs->block_size;){
+      if(fs->block_size - pos < EXT2_DIRENT_HEADER)
+        goto done;
+      uint ino = get32(buf + pos), rec = get16(buf + pos + 4);
+      uint len = get16(buf + pos + 6);
+      if(rec < 8 || rec % 4 || rec > fs->block_size - pos ||
+         len > rec - 8 || len > VFS_NAME_MAX)
+        goto done;
+      if(ino){
+        if(len == 1 && buf[pos + 8] == '.'){
+          if(dot++ || ino != ip->inum)
+            goto done;
+        } else if(len == 2 && buf[pos + 8] == '.' && buf[pos + 9] == '.'){
+          if(dotdot++ || ino != parent)
+            goto done;
+        } else {
+          r = 0;
+          goto done;
+        }
+      }
+      pos += rec;
+    }
+  }
+  r = dot == 1 && dotdot == 1 ? 1 : -1;
+done:
+  if(buf) kfree(buf);
+  return r;
+}
+
+static int
+ext2_link(void *data, const char *name, uint len, void *target)
+{
+  struct ext2_inode *dir = data, *ip = target;
+  struct ext2_fs *fs = dir->fs;
+  uchar *buf = 0, *raw = 0;
+  uint inum, block, slot, new_block = 0;
+  int r = -1, started = 0, reserved = 0, grow;
+
+  if(ip->fs != fs || ip == dir || len == 0 || len > VFS_NAME_MAX ||
+     (len == 1 && name[0] == '.') ||
+     (len == 2 && name[0] == '.' && name[1] == '.'))
+    return -1;
+  for(uint i = 0; i < len; i++)
+    if(name[i] == 0 || name[i] == '/') return -1;
+  acquiresleep(&fs->write_lock);
+  acquiresleep(&dir->lock);
+  acquiresleep(&ip->lock);
+  if(!fs->writable || fs->write_failed ||
+     (!dir->valid && ext2_read_inode(dir) < 0) ||
+     (!ip->valid && ext2_read_inode(ip) < 0) ||
+     dir->links < 2 || !ext2_simple_dir(dir) ||
+     ip->orphan || ip->links == 0 || ip->links >= EXT2_LINK_MAX ||
+     !ext2_simple_file(ip) ||
+     ext2_find_entry(dir, name, len, &inum, 0) != 1)
+    goto done;
+  buf = kalloc(); raw = kalloc();
+  if(buf == 0 || raw == 0)
+    goto done;
+  grow = ext2_dir_slot(dir, len, buf, &block, &slot);
+  if(grow < 0 || ext2_write_state(fs, 0) < 0)
+    goto done;
+  started = 1;
+  if(grow){
+    int ar = ext2_bitmap(fs, 0, &new_block, 1);
+    if(ar != 0){
+      if(ar < 0) fs->write_failed = 1;
+      goto done;
+    }
+    block = new_block;
+  }
+  // Reserve the link before exposing its name; no new inode or file data.
+  ip->links++;
+  reserved = 1;
+  if(ext2_store_inode(ip, raw) < 0 || blk_flush(fs->dev) < 0){
+    fs->write_failed = 1;
+    goto done;
+  }
+  put32(buf + slot, ip->inum);
+  put16(buf + slot + 6, len);
+  memmove(buf + slot + EXT2_DIRENT_HEADER, name, len);
+  if(ext2_write_block(fs, block, buf) < 0)
+    goto done;
+  if(grow){
+    uint index = dir->size_lo / fs->block_size;
+    dir->blocks[index] = block;
+    dir->size_lo += fs->block_size;
+    dir->sectors += fs->block_size / 512;
+    if(ext2_store_inode(dir, raw) < 0){
+      dir->blocks[index] = 0;
+      dir->size_lo -= fs->block_size;
+      dir->sectors -= fs->block_size / 512;
+      fs->write_failed = 1;
+      goto done;
+    }
+  }
+  r = 0;
+done:
+  // Only an unpublished reservation with no I/O error can be undone safely.
+  if(r < 0 && !fs->write_failed){
+    if(reserved){
+      ip->links--;
+      if(ext2_store_inode(ip, raw) < 0)
+        fs->write_failed = 1;
+    }
+    if(!fs->write_failed && new_block &&
+       ext2_bitmap(fs, 0, &new_block, 0) != 0)
+      fs->write_failed = 1;
+  }
+  if(started && ext2_write_state(fs, 1) < 0)
+    r = -1;
+  if(buf) kfree(buf);
+  if(raw) kfree(raw);
+  releasesleep(&ip->lock);
+  releasesleep(&dir->lock);
+  releasesleep(&fs->write_lock);
+  return r;
+}
+
+static int
+ext2_unlink(void *data, const char *name, uint len)
+{
+  struct ext2_inode *dir = data, *child = 0;
+  struct ext2_fs *fs = dir->fs;
+  uchar *buf = 0, *raw = 0;
+  uint inum, block, slot;
+  uint64 offset;
+  int r = -1, started = 0, locked = 0, is_dir;
+
+  if(len == 0 || len > VFS_NAME_MAX ||
+     (len == 1 && name[0] == '.') ||
+     (len == 2 && name[0] == '.' && name[1] == '.'))
+    return -1;
+  acquiresleep(&fs->write_lock);
+  acquiresleep(&dir->lock);
+  if(!fs->writable || fs->write_failed ||
+     (!dir->valid && ext2_read_inode(dir) < 0) ||
+     dir->links < 2 || !ext2_simple_dir(dir) ||
+     ext2_find_entry(dir, name, len, &inum, &offset) != 0 ||
+     inum == dir->inum || inum < fs->first_ino)
+    goto done;
+  child = ext2_iget(fs, inum);
+  if(child == 0)
+    goto done;
+  acquiresleep(&child->lock);
+  locked = 1;
+  if((!child->valid && ext2_read_inode(child) < 0) ||
+     child->links == 0 || child->orphan)
+    goto done;
+  is_dir = (child->mode & EXT2_S_IFMT) == EXT2_S_IFDIR;
+  if(is_dir){
+    if(child->links != 2 || ext2_directory_empty(child, dir->inum) != 1)
+      goto done;
+  } else if(!ext2_simple_file(child))
+    goto done;
+  buf = kalloc(); raw = kalloc();
+  block = dir->blocks[offset / fs->block_size];
+  slot = offset % fs->block_size;
+  if(buf == 0 || raw == 0 || ext2_read_block(fs, block, buf) < 0 ||
+     get32(buf + slot) != inum || ext2_write_state(fs, 0) < 0)
+    goto done;
+  started = 1;
+  uint rec = get16(buf + slot + 4);
+  put32(buf + slot, 0);
+  put16(buf + slot + 6, 0);
+  memset(buf + slot + 8, 0, rec - 8);
+  if(ext2_write_block(fs, block, buf) < 0)
+    goto done;
+  child->links = is_dir ? 0 : child->links - 1;
+  if(child->links == 0){
+    child->orphan = 1;
+    fs->orphans++;
+  }
+  if(ext2_store_inode(child, raw) < 0){
+    fs->write_failed = 1;
+    goto done;
+  }
+  if(is_dir){
+    dir->links--;
+    if(ext2_store_inode(dir, raw) < 0){
+      fs->write_failed = 1;
+      goto done;
+    }
+  }
+  r = 0;
+done:
+  if(started && ext2_write_state(fs, 1) < 0)
+    r = -1;
+  if(locked) releasesleep(&child->lock);
+  // The VFS unlink bridge pins a lookup node across this callback.
+  if(child) ext2_iput(child);
   if(buf) kfree(buf);
   if(raw) kfree(raw);
   releasesleep(&dir->lock);
@@ -1133,6 +1530,9 @@ static const struct vnode_ops ext2_node_ops = {
   .write_at = ext2_write_at,
   .truncate_zero = ext2_truncate_zero,
   .create_file = ext2_create_file,
+  .mkdir = ext2_mkdir,
+  .unlink = ext2_unlink,
+  .link = ext2_link,
 };
 
 static const struct vfs_fs_ops ext2_fs_ops = {

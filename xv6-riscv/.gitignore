@@ -17,3 +17,5 @@ user/usys.S
 .gdbinit
 TAGS
 test-output/
+__pycache__/
+*.pyc

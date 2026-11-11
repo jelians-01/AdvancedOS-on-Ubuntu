@@ -38,6 +38,20 @@ main(void)
     exit(1);
   }
   close(fd);
+  memset(buf, 0, sizeof(buf));
+  fd = open("/fat/open.txt", O_RDONLY);
+  if(fd < 0 || fstat(fd, &st) < 0 || st.size != 3 ||
+     read(fd, buf, 3) != 3 || memcmp(buf, "new", 3) != 0){
+    fprintf(2, "fat32persist: FAIL recreated file\n");
+    if(fd >= 0)
+      close(fd);
+    exit(1);
+  }
+  close(fd);
+  if(stat("/fat/delroot", &st) == 0){
+    fprintf(2, "fat32persist: FAIL deleted paths\n");
+    exit(1);
+  }
   printf("fat32persist: PASS\n");
   exit(0);
 }

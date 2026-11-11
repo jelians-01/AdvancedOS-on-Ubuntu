@@ -130,7 +130,7 @@ test_mkdir_and_nested_write(void)
   static const char deep_payload[] = "deeper\n";
   struct vfs_dirent de;
   struct stat st, parent_st;
-  int fd, r, found = 0;
+  int fd, readfd, r, found = 0;
 
   check(mkdir("/fat/newdir") == 0, "create FAT32 directory");
   check(mkdir("/fat/newdir") < 0, "reject duplicate FAT32 directory");
@@ -168,6 +168,52 @@ test_mkdir_and_nested_write(void)
   close(fd);
   fd = open("/fat/newdir/inner/../child.txt", O_RDONLY);
   check(fd >= 0, "resolve FAT32 parent path component");
+  close(fd);
+
+  check(unlink("/fat/newdir") < 0,
+        "reject removal of nonempty FAT32 directory");
+  check(mkdir("/fat/delroot") == 0 &&
+        mkdir("/fat/delroot/inner") == 0,
+        "create FAT32 deletion tree");
+  fd = open("/fat/delroot/inner/gone.txt", O_CREATE | O_RDWR);
+  check(fd >= 0 && write(fd, "gone", 4) == 4,
+        "create FAT32 deletion file");
+  close(fd);
+  check(unlink("/fat/delroot") < 0,
+        "reject removal of nonempty FAT32 deletion tree");
+  check(unlink("/fat/delroot/inner/gone.txt") == 0 &&
+        stat("/fat/delroot/inner/gone.txt", &st) < 0,
+        "remove FAT32 file from deletion tree");
+  fd = open("/fat/delroot/inner", O_RDONLY);
+  check(fd >= 0, "open empty directory before unlink");
+  check(unlink("/fat/delroot/inner") == 0 &&
+        stat("/fat/delroot/inner", &st) < 0,
+        "remove open empty FAT32 directory");
+  r = readdir(fd, &de);
+  check(r == 0, "open directory remains readable after unlink");
+  close(fd);
+  check(unlink("/fat/delroot") == 0 &&
+        stat("/fat/delroot", &st) < 0,
+        "remove FAT32 file and empty directory tree");
+
+  fd = open("/fat/open.txt", O_CREATE | O_RDWR);
+  check(fd >= 0 && write(fd, "open data", 9) == 9,
+        "create open-unlink FAT32 fixture");
+  readfd = open("/fat/open.txt", O_RDONLY);
+  check(readfd >= 0, "open FAT32 file before unlink");
+  check(unlink("/fat/open.txt") == 0 && stat("/fat/open.txt", &st) < 0,
+        "unlink open FAT32 file");
+  char open_buf[9];
+  check(read(readfd, open_buf, sizeof(open_buf)) == sizeof(open_buf) &&
+        memcmp(open_buf, "open data", sizeof(open_buf)) == 0,
+        "open FAT32 file remains readable after unlink");
+  check(write(fd, "x", 1) < 0,
+        "unlinked FAT32 file rejects further writes");
+  close(readfd);
+  close(fd);
+  fd = open("/fat/open.txt", O_CREATE | O_RDWR);
+  check(fd >= 0 && write(fd, "new", 3) == 3,
+        "recreate unlinked FAT32 name");
   close(fd);
 }
 
