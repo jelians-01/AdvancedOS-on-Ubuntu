@@ -195,8 +195,15 @@ main(int argc, char **argv)
   fd = open("/mnt/double.bin", O_WRONLY);
   if(fd < 0 || write(fd, payload, 1) != -1) fail("double indirect write accepted");
   close(fd);
-  if(open("/mnt/lost+found/new", O_CREATE | O_WRONLY) != -1)
-    fail("subdirectory creation accepted");
+  // Subdirectory creation is now supported. Verify data and remove the
+  // temporary object so host allocation accounting keeps its original scope.
+  fd = create("/mnt/lost+found/new");
+  if(write(fd, payload, 3073) != 3073) fail("subdirectory write");
+  close(fd);
+  check("/mnt/lost+found/new", payload, 3073);
+  if(unlink("/mnt/lost+found/new") != 0) fail("subdirectory cleanup");
+  if(stat("/mnt/lost+found/new", &st) != -1)
+    fail("subdirectory cleanup still visible");
   verify();
   unlink("b-source");
   unlink("b-return");
