@@ -1,0 +1,318 @@
+% 编译：XeLaTeX，连续运行两次。版式基于课程提供的 IEEEtran 会议模板。
+\documentclass[conference]{IEEEtran}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\IfFontExistsTF{Times New Roman}{\setmainfont{Times New Roman}}{\setmainfont{TeX Gyre Termes}}
+\IfFontExistsTF{Consolas}{\setmonofont{Consolas}}{\setmonofont{Latin Modern Mono}}
+\IfFontExistsTF{SimSun}{\setCJKmainfont{SimSun}[AutoFakeBold=2.2]}{\setCJKmainfont{FandolSong-Regular}[BoldFont=FandolSong-Bold]}
+\IfFontExistsTF{SimHei}{\setCJKsansfont{SimHei}}{\setCJKsansfont{FandolHei-Regular}}
+\IfFontExistsTF{SimSun}{\setCJKmonofont{SimSun}}{\setCJKmonofont{FandolSong-Regular}}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx,booktabs,array}
+\usepackage{xcolor,tikz}
+\usetikzlibrary{arrows.meta,positioning,fit}
+\usepackage{listings}
+\usepackage{cite,xurl,balance}
+\usepackage[hidelinks,unicode]{hyperref}
+\renewcommand{\abstractname}{摘要}
+\renewcommand{\IEEEkeywordsname}{关键词}
+\renewcommand{\figurename}{图}
+\renewcommand{\tablename}{表}
+\renewcommand{\refname}{参考文献}
+\renewcommand{\lstlistingname}{代码}
+\hypersetup{pdftitle={基于 xv6 的双架构多文件系统设计与实现},pdfauthor={陈建良、刘晨、周梦武}}
+\lstset{language=C,basicstyle=\ttfamily\fontsize{8.5}{10}\selectfont,
+  keywordstyle=\bfseries,commentstyle=\color{black!65},stringstyle=\color{black},
+  columns=fullflexible,keepspaces=true,showstringspaces=false,breaklines=true,
+  frame=tb,rulecolor=\color{black!35},aboveskip=6pt,belowskip=6pt,captionpos=b}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\KiB}{\,\mathrm{KiB}}
+\newcommand{\MiB}{\,\mathrm{MiB}}
+\begin{document}
+
+\title{基于 xv6 的双架构多文件系统设计与实现\\
+\large 高级操作系统课程设计报告}
+\author{\IEEEauthorblockN{陈建良\qquad 刘晨\qquad 周梦武}
+\IEEEauthorblockA{大连理工大学\quad 第 7 组\\
+高级操作系统课程设计\quad 2026 年 11 月}}
+\maketitle
+
+\begin{abstract}
+面向教学操作系统中多文件系统协同与跨架构运行的需求，本项目在 xv6 基础上实现统一虚拟文件系统，将原生文件系统、ext2 和 FAT32 接入同一目录命名空间，并在 RISC-V 与 LoongArch 两种模拟平台上运行共享的上层内核。系统通过文件节点、文件系统实例和挂载路径三个层次表达对象身份及路径上下文；通过统一字节块设备接口适配不同文件系统的块、簇和扇区访问。ext2 后端支持受限配置下的读写、嵌套目录、删除及普通文件硬链接；FAT32 后端支持长文件名、簇链写入、对象共享及唯一 MBR 主分区。验证采用客户机断言、同镜像重启、宿主逐字节比对与一致性检查相结合的方法。两平台均通过完整原生 69 项回归以及文件系统、路径、联合复制和新增功能专项。报告同时说明自动挂载、容量限制、单核 LoongArch 和非断电恢复等实现边界，区分模块原始贡献与工具辅助的集成补充，为后续扩展提供可追溯的工程基础。
+\end{abstract}
+\begin{IEEEkeywords}
+xv6；虚拟文件系统；ext2；FAT32；RISC-V；LoongArch
+\end{IEEEkeywords}
+
+\section{项目背景与设计目标}
+\subsection{背景与问题}
+xv6 是用于理解操作系统结构的 Unix 风格教学内核，具有进程、虚拟内存、文件系统和设备驱动等相对完整的基本机制\cite{xv6}。其规模适合阅读与改造，但原生文件路径、inode 操作和磁盘访问之间联系紧密。如果仅在系统调用中逐处加入文件系统类型判断，随着后端增多，路径语义、错误处理及锁规则会分散在多个位置，增加维护与集成成本。
+
+本课程项目围绕两个相互关联的问题展开：一是在保留原生文件行为的前提下，使用户程序能够通过统一接口访问不同磁盘格式；二是将文件系统等上层逻辑与处理器、异常入口和设备传输机制分离，使同一组用户操作能够在两种指令集架构上完成。前者要求处理名称与对象的关系，后者要求明确机器相关代码的边界。单独完成一个文件读取器，或单独启动一段平台实验程序，都不能证明这两个目标已经同时实现。
+
+\subsection{目标与验收范围}
+系统目标包括：保持 xv6 原有程序与文件接口可用；统一原生文件系统、ext2 与 FAT32 的路径查找和文件读写；支持三种文件系统之间的数据复制；完成 RISC-V 和 LoongArch 上的内核启动、用户态运行及多盘访问；通过可复现测试证明基本功能、错误处理和正常同步后的持久性。
+
+为使目标可以检查，项目将“能够复制”具体化为内容、长度、返回结果和重启后状态均正确，而不是只观察终端出现文件名。原生回归用于检查兼容性，后端专项用于检查格式与分配边界，联合场景用于检查模块之间的协作。课程赛题的原始程序用于对照其明确覆盖的操作；其没有直接验证 FAT32 写入、另一种架构或断电恢复，不能代替全部工程验收。
+
+项目以教学可理解性和正确性为优先目标，没有将工业级文件系统的全部语义作为本轮实现范围。最终系统采用启动时自动挂载，用户态手动挂载与卸载仍未实现。因此，自动挂载条件下的赛题复制通过不等于赛题说明中的手动挂载要求已经完成。
+
+\section{系统整体框架与接口约定}
+\subsection{分层结构}
+图\ref{fig:architecture}给出系统的数据访问关系。用户程序通过系统调用访问文件描述符；VFS 负责通用对象、路径解析与操作分派；三个后端负责各自磁盘格式；设备层完成实际传输。VFS 不直接解释 ext2 的块指针或 FAT32 的簇链，后端也不负责判断跨挂载点的完整路径。
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[font=\small,box/.style={draw,rounded corners=1pt,align=center,minimum height=8mm},arr/.style={-{Stealth[length=1.5mm]},thick},node distance=4mm]
+\node[box,text width=7.6cm] (user) {用户程序与系统调用\\open / read / write / mkdir / unlink / sync};
+\node[box,text width=7.6cm,below=of user] (vfs) {VFS：实例、节点、挂载路径与操作分派};
+\node[box,text width=2.2cm,below=6mm of vfs] (ext) {ext2 后端\\/mnt，设备 2};
+\node[box,text width=2.2cm,left=3mm of ext] (native) {原生后端\\/，设备 1};
+\node[box,text width=2.2cm,right=3mm of ext] (fat) {FAT32 后端\\/fat，设备 3};
+\node[box,text width=2.2cm,below=of native] (cache) {块缓存与日志};
+\node[box,text width=4.7cm,below=of ext,xshift=1.25cm] (d1) {D1 字节块设备接口};
+\node[box,text width=7.6cm,below=7mm of cache,xshift=2.5cm] (transport) {平台磁盘传输\\RISC-V：VirtIO MMIO\quad LoongArch：VirtIO PCI};
+\draw[arr] (user)--(vfs);
+\draw[arr] (vfs.south)--(ext.north);
+\draw[arr] (vfs.south -| native.north)--(native.north);
+\draw[arr] (vfs.south -| fat.north)--(fat.north);
+\draw[arr] (native)--(cache);
+\draw[arr] (ext.south)--(ext.south |- d1.north);
+\draw[arr] (fat.south)--(fat.south |- d1.north);
+\draw[arr] (cache.south)--(cache.south |- transport.north);
+\draw[arr] (d1.south)--(d1.south |- transport.north);
+\end{tikzpicture}
+\caption{共享上层逻辑与平台相关传输。原生后端继续使用块缓存和日志；ext2、FAT32 经 D1 访问数据盘。}
+\label{fig:architecture}
+\end{figure}
+
+默认的逻辑设备身份为 1、2、3，分别对应原生根目录、ext2 数据盘和 FAT32 数据盘。设备身份与文件系统类型不是同一个概念：同一种后端可以具有不同实例，节点必须同时属于一个明确的实例。文件系统实例保存后端私有信息和操作表；\code{vnode} 包装实际后端对象；\code{vfs\_path} 同时保存节点与挂载上下文。这样即使两个节点名称相同，也不会因设备或挂载来源不同而被混淆。
+
+\subsection{统一操作与生命周期}
+后端操作表提供 \code{lookup}、\code{read\_at}、\code{write\_at}、\code{getattr}、\code{create\_file}、\code{mkdir}、\code{unlink}、\code{readdir} 等方法。支持同卷硬链接的后端实现 \code{link}，不支持的操作返回失败。调用者通过统一包装函数操作对象，无需在每个系统调用中重复区分磁盘格式。
+
+接口文档不仅规定函数签名，还规定对象所有权。查找成功时返回一个由调用者负责释放的后端引用；失败时输出保持为空。VFS 节点持有其文件系统实例，只有节点引用与实例引用都正确释放，才能避免失效指针或资源泄漏。同一实例内相同的实际对象应具有稳定身份，否则两个打开句柄可能分别持有不一致的长度、父目录或删除状态。
+
+锁与事务边界也在接口层明确。通用路径层不持有原生文件系统事务去调用任意外部后端；各后端在自身操作内取得所需节点锁或卷写锁。会阻塞的磁盘访问不能放在通用表自旋锁内。统一 \code{sync} 表示刷新已经完成的更新与设备状态，并不产生跨三个文件系统的原子快照，也不能保证任意时刻断电后恢复一致。
+
+\subsection{数据单位与错误语义}
+D1 的偏移和长度以字节为单位，驱动的传输单位为扇区；ext2 按文件系统块解释偏移，FAT32 按簇链解释偏移。各层在边界处完成单位转换，避免将“第几个块”误当成“第几个字节”。读取或写入函数返回已经完成的字节数；零长度请求返回零；无进展的失败返回负值。短读写必须由上层按实际返回值处理，不能把“调用没有崩溃”当作完成全部请求。
+
+\section{队员信息与具体分工}
+小组由陈建良、刘晨、周梦武三名成员组成。分工按接口边界划分，而不是按文件数量划分。表\ref{tab:roles}列出各成员负责的内容；后续章节分别说明模块设计与实际完成情况。
+
+\begin{table}[t]
+\caption{成员职责与主要工作内容}
+\label{tab:roles}
+\centering
+\begin{tabular}{p{1.25cm}p{6.35cm}}
+\toprule
+成员 & 职责和具体工作 \\
+\midrule
+陈建良 & VFS 与原生适配；统一节点和实例、路径逐段解析、挂载点穿越、目录枚举、系统调用与文件对象接入；参与公共接口和集成验收组织。 \\
+刘晨 & ext2、FAT32 格式与后端；文件读写、空间分配、目录操作、ext2 硬链接、VFAT 长名和 MBR 分区；提供后端用户程序与宿主检查。 \\
+周梦武 & D1 字节块设备、多盘传输与平台工作；非对齐读改写、设备身份及访问边界；LoongArch 分页、用户态和 PCI 设备等机制实验。 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+集成过程中使用了编程助手进行代码审查、冲突处理、构建脚本调整与测试执行。需要特别区分原始交付和后续补齐：周梦武原交付包含块设备与 LoongArch 机制实验，正式 LoongArch xv6 内核、\code{init/sh} 和共享上层接入在结题集成阶段借助助手补齐；后端错误传播、共享节点和部分回滚保护等修复也在集成阶段完成。本轮将刘晨的新版本增量合入最终项目，并保留这些既有修复。报告中的最终系统能力属于整合结果，不将工具辅助补充倒算为某位成员原始交付的全部内容。
+
+协作采用共同接口、独立模块验证、增量整合和整体验收的顺序。提交中保留不同阶段的来源，新的交付若包含旧版本的公共代码，只提取负责模块的变化，不以整个目录覆盖当前项目。这个做法避免了新增后端功能时意外丢失已经通过测试的平台代码或 VFS 修复。
+
+\section{关键模块设计与实现}
+\subsection{陈建良：VFS 路径与原生文件系统适配}
+\subsubsection{路径是上下文，不只是字符串}
+路径解析以当前 \code{vfs\_path} 为起点逐段查找。绝对路径从根挂载开始，相对路径从进程当前目录开始。解析完一个分量后，系统检查该节点是否被新的挂载覆盖；若是，则切换到对应文件系统的根节点。文件名的磁盘解释由该节点所属后端执行。
+
+例如解析 \code{/mnt/sub/a.txt} 时，先在原生命名空间中找到 \code{mnt} 挂载点，再切换到 ext2 根节点，由 ext2 查找 \code{sub} 和 \code{a.txt}。解析 \code{/fat/sub/a.txt} 则通过同样的 VFS 流程转入 FAT32 后端。VFS 不需要调用一个专用的“控制 FAT32”流程，区别来自节点携带的操作表和实例信息。
+
+\subsubsection{挂载根目录的父路径}
+普通节点的 \code{..} 由后端目录语义处理，但位于挂载根时，\code{..} 应回到外部命名空间中的父目录，而不是永远停留在数据盘根。代码\ref{lst:vfs}是实际路径函数的关键分支，省略参数检查及返回部分。\code{dir} 是当前目录对象；\code{base} 默认指向它，在跨越挂载根父路径时改为被覆盖的原节点。
+
+\begin{lstlisting}[caption={VFS 挂载根的父路径处理（节选自 kernel/vfs.c）},label={lst:vfs}]
+const struct vfs_path *base = dir;
+if(name && len == 2 && name[0] == '.' &&
+   name[1] == '.' &&
+   dir->vn == dir->mnt->root &&
+   dir->mnt->covered.vn)
+  base = &dir->mnt->covered;
+out->vn = vfs_lookup(base->vn, name, len);
+if(out->vn == 0)
+  return -1;
+out->mnt = vfs_mount_dup(base->mnt);
+vfs_follow_mount(out);
+\end{lstlisting}
+
+以 \code{/mnt/../hello.c} 为例：\code{/mnt} 到达 ext2 根；处理 \code{..} 时，先取得原生命名空间中被覆盖的 \code{/mnt} 节点，再查它的父节点，得到原生根 \code{/}；最后在原生后端查找 \code{hello.c}。如果只对字符串做“删除上一段”，就无法可靠表达相对路径、真实挂载上下文及引用关系。保存节点与挂载引用使这种语义在逐段遍历中保持一致。
+
+\subsubsection{兼容性与目录枚举}
+原生适配层将既有 inode 操作包装成统一回调，继续使用原有缓存和日志事务。目录枚举返回统一目录项，并以不透明游标继续遍历。上层 \code{ls} 因而可以列出不同后端的目录，而不必了解各自磁盘目录项的布局。进程的当前目录、文件打开与执行路径也需要经过同一套桥接，否则可能出现普通读取成功而相对路径或执行失败的局部接入问题。
+
+验证中分别检查深层父目录遍历、相对路径、目录枚举和执行行为，再使用原生完整回归检测改造对旧语义的影响。挂载点的生命周期还需要受保护，不能直接删除正在被覆盖的节点并使挂载记录悬空。
+
+\subsection{刘晨：ext2 文件与目录后端}
+\subsubsection{格式解析和按偏移读写}
+ext2 使用超级块、组描述符、位图、inode 表和数据块组织卷内容\cite{ext2}。本后端将磁盘结构解析为私有实例与 inode 对象，再通过 VFS 操作表对外提供服务。挂载时先检查格式与容量边界，不能仅因魔数正确就允许全部写入。
+
+文件读取将字节偏移分解为逻辑块号和块内偏移，如代码\ref{lst:ext2}所示。\code{ext2\_map\_block} 将逻辑块转换成磁盘物理块。一个请求可能跨多个块，因此每次处理长度由当前块的剩余空间和请求剩余长度共同限制；稀疏区域按零填充，读取或用户拷贝失败时返回实际进展。
+
+\begin{lstlisting}[caption={ext2 单次块内处理长度（节选自 kernel/ext2.c）},label={lst:ext2}]
+uint pos = off + total;
+uint logical = pos / fs->block_size;
+uint within = pos % fs->block_size;
+uint take = fs->block_size - within;
+uint physical;
+if(take > n - total)
+  take = n - total;
+if(ext2_map_block(ip, logical,
+                  &physical) < 0)
+  break;
+\end{lstlisting}
+
+写入不仅要更新数据，还要维护块分配、inode 大小和相关计数。当前可写配置限定为初始干净、无特性位、1 KiB 块和 128 字节 inode。普通文件使用 12 个直接块与单级间接块，写入上限为
+\begin{equation}
+ (12+1024/4)\times1024=274432\ \text{字节}=268\KiB.
+\end{equation}
+读取器能解析更大范围的格式，不意味着写路径具有同样的能力；双级和三级间接块写入仍不支持。
+
+\subsubsection{目录、删除与硬链接}
+新版后端支持嵌套目录和子目录内文件创建，目录可扩展到 12 个直接块，即 12 KiB。创建目录需要建立 \code{.}、\code{..} 并维护父目录链接数和目录计数，不能只分配一个普通文件 inode 后改变类型。目录查找还要正确跨越记录边界，避免将目录块中的剩余空间当成完整有效条目。
+
+删除普通文件时，需要区分“目录中的名字消失”和“对象已无引用”。若文件仍被打开，其内容继续保留到最后引用释放；同名重建则产生新的对象。当前实现允许读取已删除但仍打开的文件，拒绝继续写入或截断，不宣称完整 POSIX 语义。非空目录不能删除，已被删除但仍作为当前目录的对象也不能继续创建子项。
+
+硬链接只允许同卷普通文件。多个目录项指向同一个 inode，必须共享内容和截断结果，并正确增加、减少链接计数。只有名字引用和打开引用均满足回收条件，才能释放 inode 与数据块。链接数上限为 32767；跨文件系统链接和目录硬链接不在支持范围。
+
+\subsubsection{错误处理与回归适配}
+坏 inode 的读取失败通过有效位和后续操作返回值向上层传播，避免将可报告的文件错误直接升级为内核 panic。写入失败需要维护可解释的卷状态；当前机制使用错误标记与停止写入等约束，未提供日志式事务恢复。
+
+新功能还要求更新旧的能力断言。原回归曾把在 \code{/mnt/lost+found/new} 创建文件视为错误，新版支持该操作后，这条断言在两架构均失败。修订后的测试实际创建文件，写入并完整读回 3073 字节，再删除并确认名称消失；宿主净分配量仍严格检查为 336 块和 11 个 inode。这里改变的是功能预期，而不是忽略失败或放宽空间一致性标准。
+
+\subsection{刘晨：FAT32、长文件名与分区卷}
+\subsubsection{簇链访问与共享对象}
+FAT32 后端使用卷引导参数、文件分配表和目录项解释磁盘数据。文件由簇链组织，扩展写入可能要求申请多个簇、连接链表并更新文件长度。对于非对齐覆盖，必须保留请求范围之外的已有字节；对于新目录簇，则必须正确清零全部内容，不能只清零内存页大小范围。
+
+多个句柄、长名与短名别名可能指向同一个磁盘对象。后端通过共享节点维护一致的大小、删除状态和父引用；目录也需要共享身份，才能正确处理 \code{.}、\code{..} 与深层父路径。原结题集成中的这些保护在新版本合并时保留，避免功能增加后重新引入生命周期问题。
+
+\subsubsection{VFAT 名称与删除组}
+VFAT 在短目录项之外使用长名称记录表达更丰富的名称\cite{vfat}。本后端将用户输入的 UTF-8 与磁盘 UTF-16 表示转换，检查名称顺序、校验关联及终止条件，并保留 8.3 别名。ASCII 字母匹配不区分大小写，其他字符按实际内容匹配；整条路径含结束符仍受 \code{MAXPATH=128} 限制。
+
+长名称记录可能跨越目录簇边界，不能假定整个名称总在一个缓冲区内。创建时需要保证长名组与短目录项之间的对应关系；删除时应处理整组记录，避免留下孤立长名项。对于故意损坏的长名组，测试分别检查短别名回退和拒绝破坏性部分删除，而不是将所有异常输入当作正常名字继续写入。
+
+\subsubsection{MBR 分区与 FSInfo}
+内核可识别偏移为零的原始 FAT32 卷，或 MBR 中唯一一个类型为 0x0B/0x0C 的主分区。读取分区卷时，卷内地址需要加上分区起点，同时检查分区与整个设备的边界。存在多个候选、重叠或越界分区时拒绝挂载；保护性 GPT、扩展分区和逻辑分区不在当前支持范围。宿主旧读取器仍以原始卷为输入，MBR 检查先提取目标分区。
+
+FSInfo 的空闲计数与下次搜索位置是分配提示，不是取代 FAT 检查的权威来源。新版维护主 FSInfo 中已知的计数与提示，备份记录保留不改；未知值继续允许保持未知，范围内但已经过期的计数不保证自动修复。该策略与旧版将主备计数均标未知的处理不同，整合中只保留一套一致策略。
+
+\subsubsection{写入失败与回滚边界}
+用户缓冲在写入前进行整段可访问性预检，避免后半段地址无效时先覆盖前半段旧数据。可撤销的簇链扩展先解除连接并刷新，再释放簇并刷新，防止仍可能被持久引用的簇被立即重新分配。
+
+底层写入或刷新失败时，不能将内存中“撤回修改”等同于磁盘已恢复。系统采用保留可能仍被引用的分配并禁用该卷继续写入的策略，以减少错误扩散。这种策略不承诺恢复已覆盖的旧内容，也不等同于任意掉电下的原子写入。故障注入测试验证的是这些明确的失败路径和拒写行为。
+
+\subsection{周梦武：字节块设备与平台支撑}
+\subsubsection{D1 字节请求到扇区传输}
+D1 向上提供 \code{blk\_read/write/size/flush}，向下调用平台传输。VirtIO 的设备约定为驱动实现提供统一基础\cite{virtio}，但上层字节请求通常不会恰好对齐扇区边界。代码\ref{lst:d1}给出每轮切分长度的计算：\code{skip} 为首扇区偏移，\code{take} 为本轮处理字节数。
+
+\begin{lstlisting}[float=tb,caption={D1 请求切分与进度推进（节选自 kernel/blkdev.c，省略传输分支）},label={lst:d1}]
+uint skip = off % VDISK_SECTOR_SIZE;
+uint take = VDISK_SECTOR_SIZE - skip;
+if(take > n)
+  take = n;
+uint64 sector = off / VDISK_SECTOR_SIZE;
+/* transfer through the sector buffer */
+p += take;
+off += take;
+n -= take;
+\end{lstlisting}
+
+以扇区大小 512 字节、起始偏移 509、长度 1031 的写请求为例，请求被分为 3、512、512、4 字节四段。第一段和最后一段先读整个扇区，再修改指定范围并写回；两个完整扇区直接通过设备缓冲传输。四段之和为 1031，首尾扇区中未被请求覆盖的字节应保持不变。这是“读改写”的实际作用。
+
+设备级睡眠锁覆盖整个字节请求，使共享扇区缓冲及非对齐读改写不被同设备上的并发请求打断。边界检查使用 \code{n > size - off} 等减法形式防止 \code{off+n} 溢出。DMA 通过每设备的静态扇区缓冲完成，而不是直接使用可能处于非恒等映射高地址的内核栈。D1 还禁止直接写原生根设备，避免绕过其块缓存与日志；原生路径仍走原有机制。
+
+\subsubsection{多盘与双架构边界}
+RISC-V 使用 VirtIO MMIO，LoongArch 使用 VirtIO PCI。平台差异集中于启动、页表、异常和中断、上下文切换、串口及 PCI 设备发现等部分；VFS、ext2、FAT32 和大部分用户程序共用源码。LoongArch 的异常与页表权限实现依据其体系结构约定\cite{loongarch}，不能通过仅更换编译器或 QEMU 名称完成移植。
+
+正式 LoongArch 版本已经能够运行 \code{init/sh} 和用户测试。验证配置为单 CPU、模拟器分配 1 GiB 内存，内核使用低 128 MiB；PCI 磁盘采用轮询方式。RISC-V 验证使用 3 CPU、128 MiB。两者执行同类功能测试，说明共享逻辑在这些配置下可用，但不同 CPU 数、设备传输和工具链不构成受控性能对比，本报告不据此给出速度或吞吐量结论。
+
+\section{实验设计、结果与分析}
+\subsection{证据组织和判定方法}
+本轮文件系统整合验收源码为提交 \code{9eda7a0}。联合与 MBR 新功能首轮基于 \code{e937ea9}，两者内核相同，差异是旧 \code{ext2write} 测试的能力断言修订。各轮保留自己的提交号和镜像哈希，不将早期记录改写为后续版本。文档整理和部署目录变化不替代运行证据。
+
+测试采用四层判定。第一层检查客户机是否实际执行指定程序、退出状态是否正确，并查找全部预期成功行；第二层在同一组三张磁盘上重启读回，比较读取前后的镜像哈希；第三层由宿主独立读取文件并逐字节比较内容和长度；第四层检查分配计数、FAT 副本、FSInfo 与文件系统一致性。不同层次互相补充，可发现“程序输出成功但镜像内容错误”等单一检查难以识别的问题。
+
+所有写入测试均使用独立镜像副本，不直接消耗展示模板。异常输入测试还要求被拒绝的卷保持不变；MBR 场景检查分区之外的全部字节，确保地址换算没有写出目标分区。正常回归与故意损坏夹具分别解释，后者出现预期错误并不代表正常卷应被降低验收标准。
+
+\subsection{主要结果}
+表\ref{tab:results}给出按套件组织的结果。这里的顶层记录与程序内部断言具有包含关系，不能把 56、69、13 和 6 简单相加为总测试数。完整原生回归包含慢速组；\code{badwrite} 的附加检查核对操作前后空闲块数相同，用于排除坏地址写入造成的隐蔽空间泄漏。
+
+\begin{table}[t]
+\caption{双架构功能验收结果及统计口径}
+\label{tab:results}
+\centering
+\begin{tabular}{p{3.65cm}p{1.6cm}p{1.65cm}}
+\toprule
+套件与范围 & RISC-V & LoongArch \\
+\midrule
+完整矩阵，56 条顶层记录 & 通过 & 通过 \\
+其中原生完整 69 项 & 通过 & 通过 \\
+joint/MBR，13 条顶层记录 & 通过 & 通过 \\
+大簇/VFAT，6 条顶层记录 & 通过 & 通过 \\
+原样赛题 96 字节兼容性 & 通过 & 通过 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+完整矩阵覆盖 ext2 读写、容量耗尽与重试、只读设备拒写、目录扩容和正常重启；FAT32 基础读写、坏签名、错误扇区大小、截断镜像、坏簇链和缺失设备；同时覆盖 VFS 目录、相对路径、执行与平台权限隔离。宿主检查对 ext2 使用 \code{e2fsck}，对正常 FAT32 卷使用 \code{fsck.fat}，并独立核对文件数据。
+
+新增联合场景同时接入三盘，运行 ext2 删除、目录和硬链接，以及 FAT32 长名和多句柄操作，然后重启检查数据与分配关系。MBR 场景包括实际后端的 17 项宿主挂载检查、分区内写入和重启读回；卷外字节保持不变。交付目录与工具迁移后，两平台的联合与 MBR 场景再次通过，验证了整理后的运行入口。独立宿主故障测试还包含 FAT32 I/O 的 12 个场景和 FSInfo 的 7 个场景，使用 AddressSanitizer 与 UndefinedBehaviorSanitizer 检查内存和未定义行为。这些检查不是电源故障模拟。
+
+大簇专项使用 8 KiB 簇，检查跨三个簇的写入、从 8189 字节开始的非对齐覆盖、数据邻域及新目录簇的完整清零。长名专项覆盖跨簇 UTF-8 名称、长短别名同一节点、损坏校验回退和损坏长名组删除保护；只读检查前后整个镜像哈希保持一致。它们补足了常规小簇、短名称用例没有直接触达的边界。
+
+\subsection{六向复制为什么使用 30001 字节}
+三种文件系统产生六个有方向的跨后端组合：原生与 ext2、原生与 FAT32、ext2 与 FAT32 各有两个方向。样本取 30001 字节，目的是让同一测试同时跨越常见边界，而不是宣称这个数字具有特殊算法意义。其长度大于 ext2 的 12 个 1 KiB 直接块范围，会使用单级间接块；它既不是 512 的整数倍，也不是 1024 的整数倍，会产生不足一扇区和不足一块的尾部。对 FAT32 而言也会跨多个簇。
+
+采用确定性数据样本可以在宿主生成同样的预期内容。六个方向分别比较全部字节与长度，避免仅比较前缀或仅观察 \code{ls} 的大小。随后同步、重启并读取同一镜像，检查数据持久化；读取验证前后镜像不变，则可以辅助证明验证过程本身没有通过重写数据掩盖错误。
+
+\subsection{原始赛题用例与现场展示}
+原始赛题包括两个用户程序、73 字节脚本和 96 字节 \code{hello.c} 样本。测试一要求四次原生与 ext2 之间的复制分别出现成功信息；测试二要求跨文件系统复制成功并打印文件内容。两个程序的主函数不会可靠地将全部内部失败传播为非零退出码，因此退出零不能单独作为验收标准。
+
+原样兼容性补验使用旧的赛题用户镜像配新版内核；原始测试 C 文件与项目中对应源文件逐字节一致。验证要求五条成功信息分别出现一次，并在同步后从宿主核对 \code{/hello.c}、\code{/tests/hello.c} 与 ext2 的 \code{/hello.c} 三份完整 96 字节内容。该结果说明新版内核能够运行原赛题用户镜像；最终候选全部用户程序的回归由完整矩阵另行承担。
+
+最终交付的 \code{demo/} 模板另用当前内核和全部 45 个用户程序重新生成，并在两平台重新通过原题五条成功断言、三份完整 96 字节内容比对及宿主文件系统一致性检查。展示使用这套重新生成的模板，前述旧用户镜像补验作为独立的历史兼容性证据保留。
+
+现场展示仅安排比赛程序。进入系统后在 \code{/tests} 中执行原脚本，展示五条明确成功信息及测试二输出；完整矩阵和新增功能结果通过报告与证据说明，不重复在现场运行全部慢速用例。脚本中创建 \code{/mnt} 时可能出现目录已存在的诊断，因为该点已在启动时自动挂载；\code{mkdir} 并不是 \code{mount}，这一差异在汇报中需要明确说明。
+
+\subsection{有效性边界}
+通过当前用例只能支持测试条件内的结论。宿主文件系统工具返回零、完整字节比较正确和正常重启成功，为已经覆盖的操作提供证据；它们不能证明所有未覆盖的格式特性、任意并发时序、所有畸形镜像和任意掉电点均安全。RISC-V 与 LoongArch 都运行在 QEMU 中，尚无实机验证。系统也未开展统一硬件资源下的性能基准，故不报告性能提升比例。
+
+\section{代码交付与部署说明}
+代码交付仓库与指定发布分支如下，目标分支为 \code{master}\cite{project}。部署步骤见该仓库根目录的 README，包括构建依赖、双架构启动、展示用例与结果判据；本报告不重复维护可能随交付目录调整而变化的机器路径。项目主体位于 \code{xv6-riscv/}，内核、用户程序、镜像构建和测试目录分别表达实现与验证边界；\code{demo/} 保存展示所需内容，\code{report/} 保存本报告及可编辑 LaTeX 源文件。
+
+\begin{center}
+\small
+\url{https://github.com/jelians-01/AdvancedOS-on-Ubuntu/tree/master}
+\end{center}
+
+使用者应按仓库说明选择目标架构并建立独立运行镜像。内核、根镜像和附加数据盘共同构成一次可复现运行，单独复制一个内核文件或沿用旧模板不能证明运行的是最新版。跨架构构建产物分开放置，避免将 RISC-V 用户程序装入 LoongArch 根镜像。对于本地配套工具，也应遵循部署说明核对版本，而不是把本机曾经通过视为新设备自动通过。
+
+代码可用性与报告可追溯性分开管理：源码通过 Git 提交记录维护；验收记录标明被测版本、架构、镜像来源及检查结果；LaTeX 源码与课程提供的 \code{IEEEtran.cls} 一起交付，能够重新生成 PDF。没有将历史截图或早期机制实验当作最新版整体验收的替代证据。
+
+\balance
+\section{总结与展望}
+本项目完成了从原生单文件系统接口到统一多后端访问的扩展，并使共享上层内核在 RISC-V 与 LoongArch 上运行。陈建良负责的 VFS 工作解决路径、对象和挂载上下文的统一；刘晨负责的 ext2/FAT32 工作将不同磁盘格式接入同一操作接口；周梦武负责的块设备与平台工作提供字节访问、多盘传输和平台机制基础。结题集成与后续更新通过工具辅助补齐接口衔接、正式移植和错误路径，并通过双平台验收约束最终行为。
+
+工程上的主要认识是：文件系统集成的难点不止于解析磁盘结构，还在于引用、锁、失败返回和数据发布顺序必须一致。路径功能需要连同挂载语义验证，写入功能需要连同空间回收和错误路径验证，平台移植需要连同正式用户态与共享上层验证。增量合并和保留来源使新功能可以接入，同时避免覆盖已有修复。
+
+后续工作按依赖顺序展开。首先补齐用户态挂载与卸载接口，明确忙节点、引用存活和命名空间更新规则，使使用流程与赛题要求一致。其次扩展 ext2 写入配置和寻址能力，完善权限、时间戳、符号链接等语义，并为 FAT32 增加更系统的畸形输入与并发验证。在可靠性方面，应引入明确的持久化协议及故障注入模型，逐步验证断电恢复，而不是把现有同步刷新扩写成事务保证。
+
+平台方向可进一步研究 LoongArch 多核与中断驱动 I/O，在同等资源配置下增加性能测量，并最终开展实机验证。所有扩展都应保持统一接口和独立可复现测试，使新的能力建立在已有正确性证据之上。
+
+\begin{thebibliography}{00}
+\bibitem{xv6} R. Cox, M. F. Kaashoek, and R. Morris, \emph{xv6: a simple, Unix-like teaching operating system}, RISC-V rev. 5, MIT, 2025. [Online]. Available: \url{https://pdos.csail.mit.edu/6.828/2025/xv6/book-riscv-rev5.pdf}
+\bibitem{ext2} The Linux Kernel Documentation, ``The Second Extended Filesystem.'' [Online]. Available: \url{https://docs.kernel.org/filesystems/ext2.html}
+\bibitem{vfat} The Linux Kernel Documentation, ``VFAT filesystem.'' [Online]. Available: \url{https://github.com/torvalds/linux/blob/master/Documentation/filesystems/vfat.rst}
+\bibitem{virtio} OASIS, \emph{Virtual I/O Device (VIRTIO) Version 1.2}, Committee Specification 01, 2022. [Online]. Available: \url{https://docs.oasis-open.org/virtio/virtio/v1.2/virtio-v1.2.html}
+\bibitem{loongarch} Loongson Technology Corporation Limited, \emph{LoongArch Reference Manual, Volume 1: Basic Architecture}, ver. 1.10. [Online]. Available: \url{https://loongson.github.io/LoongArch-Documentation/LoongArch-Vol1-EN.html}
+\bibitem{project} 陈建良、刘晨、周梦武，``AdvancedOS-on-Ubuntu：课程项目源码与部署说明.'' [Online]. Available: \url{https://github.com/jelians-01/AdvancedOS-on-Ubuntu/tree/master}
+\end{thebibliography}
+\end{document}

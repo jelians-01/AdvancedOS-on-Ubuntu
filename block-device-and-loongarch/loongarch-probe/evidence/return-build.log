@@ -1,4 +1,0 @@
-mkdir -p build
-9000000000201000 T _start
-9000000000200000 T return_vector
-90000000002020d0 B stack_top

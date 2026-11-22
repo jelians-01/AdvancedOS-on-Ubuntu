@@ -1,2 +1,0 @@
-PASS: 20000 concurrent partial-sector writes and neighbor guards
-PASS: I/O errors, partial failure, unsupported flush, readonly and overflow

@@ -1,5 +1,5 @@
 # Shared xv6 kernel and user sources, architecture-isolated output files.
-LA_TOOLS ?= /home/jelians/AdvancedOS-tools/llvm18
+LA_TOOLS ?= $(abspath ../tools/llvm18)
 LA_CC ?= $(LA_TOOLS)/usr/bin/clang-18
 LA_LD ?= $(LA_TOOLS)/usr/bin/ld.lld-18
 export LD_LIBRARY_PATH := $(LA_TOOLS)/usr/lib/x86_64-linux-gnu:$(LD_LIBRARY_PATH)
@@ -47,7 +47,7 @@ $(LA_BUILD)/mkfs: mkfs/mkfs.c kernel/fs.h kernel/param.h
 $(LA_BUILD)/fs.img: $(LA_BUILD)/mkfs README $(LA_USERS)
 	cp README $(LA_BUILD)/README
 	cd $(LA_BUILD) && ./mkfs fs.img README $(addprefix user/_,$(LA_PROGRAMS))
-LA_QEMU ?= qemu-system-loongarch64
+LA_QEMU ?= $(if $(wildcard ../tools/bin/qemu-system-loongarch64),$(abspath ../tools/bin/qemu-system-loongarch64),qemu-system-loongarch64)
 LA_QEMUOPTS := -machine virt -m 1G -smp 1 -nographic -nic none -kernel $(LA_BUILD)/kernel.elf
 LA_QEMUOPTS += -drive file=$(LA_BUILD)/fs.img,if=none,format=raw,id=root -device virtio-blk-pci,drive=root,disable-legacy=on,addr=1
 ifneq ($(DISK2),)

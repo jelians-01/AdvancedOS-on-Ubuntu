@@ -1,0 +1,30 @@
+文件用途
+
+课程设计报告-第7组.pdf：可直接提交、阅读和打印的最终报告。
+main.tex：可编辑的中文 LaTeX 源文件。
+IEEEtran.cls：课程提供的 IEEE 会议论文模板类文件，保持原样。
+
+编译方法
+
+使用 XeLaTeX，连续编译两次 main.tex，以解析引用和编号。
+应安装 fontspec、xeCJK、TikZ、listings、booktabs、balance 等常见 TeX Live 宏包。
+本机已使用 TeX Live 2026 编译验证。Windows 优先使用宋体、黑体、Times New Roman 和 Consolas；其他环境自动回退到 TeX Live 的 Fandol 与 TeX Gyre/Latin Modern 字体，不需要修改正文。
+
+例如在此目录打开 PowerShell，执行：
+
+$reportBuild = Join-Path $env:TEMP 'advancedos-report-build'
+New-Item -ItemType Directory -Path $reportBuild -Force | Out-Null
+xelatex -interaction=nonstopmode -halt-on-error "-output-directory=$reportBuild" main.tex
+xelatex -interaction=nonstopmode -halt-on-error "-output-directory=$reportBuild" main.tex
+
+编译后的文件位于临时目录中的 main.pdf。确认内容后另存为需要的提交文件名；命令不会覆盖本目录已交付的 PDF。
+
+报告依据
+
+以本项目 2026 年 11 月 22 日整合与双平台验收记录为依据。正文区分原始赛题补验、完整候选回归及新增专项，明确功能限制与工具辅助集成归属。姓名已按小组实际成员填写；未提供的学号、邮箱和导师信息未编造。
+源码与部署入口：https://github.com/jelians-01/AdvancedOS-on-Ubuntu/tree/master
+
+排版与验证
+
+采用课程提供的 IEEEtran conference 双栏、10 磅正文和原始纸张尺寸，中文字体已嵌入。最终共 5 页，包含 1 幅系统架构图、2 张表和 3 段代码节选。所有页已渲染检查；最终编译无 Overfull、缺字或未解析引用。LaTeX 针对中文缺少西文斜体/小型大写形态给出回退提示，实际中文按正体显示，不影响内容。
+辅助编译和预览文件保存在临时目录，没有放入此交付目录。

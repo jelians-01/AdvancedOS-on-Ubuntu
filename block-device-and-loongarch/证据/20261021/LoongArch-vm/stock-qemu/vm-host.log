@@ -1,7 +1,0 @@
-mkdir -p build
-cc -std=c11 -O1 -g -Wall -Wextra -Werror -fno-omit-frame-pointer -fno-pie -no-pie -fsanitize=address,undefined page-allocator.c vm-table.c vm-host-test.c -o build/vm-host-test
-./build/vm-host-test
-vm-host: aligned contiguous frames fragmentation clearing PASS
-vm-host: mapping bounds aliases protection unmap PASS
-vm-host: allocation failure rollback PASS
-vm-host: table reclamation ALL PASS

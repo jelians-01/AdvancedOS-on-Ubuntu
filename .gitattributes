@@ -1,0 +1,4 @@
+# Original contest inputs and supplied class must retain exact bytes.
+/demo/tests/* -text
+/report/IEEEtran.cls -text
+*.pdf binary

@@ -1,5 +1,0 @@
-mkdir -p build
-/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-gcc -march=loongarch64 -mabi=lp64d -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -fno-builtin -O2 -Wall -Wextra -c return-start.c -o build/return-start.o
-/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-gcc -march=loongarch64 -mabi=lp64d -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -fno-builtin -O2 -Wall -Wextra -c return-vector.S -o build/return-vector.o
-/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-gcc -nostdlib -nostartfiles -nodefaultlibs -static -no-pie -Wl,--build-id=none -Wl,-T,return-linker.ld build/return-start.o build/return-vector.o -o build/return-probe.elf
-/mnt/d/gpt_work/高级操作系统/tools/loongarch-cross/root/cross-tools/bin/loongarch64-unknown-linux-gnu-objdump -d -S build/return-probe.elf > build/return-probe.dis

@@ -1,4 +1,0 @@
-trap return: before syscall
-R
-trap return: after ertn
-qemu-system-loongarch64: terminating on signal 15 from pid 655 (/usr/bin/timeout)

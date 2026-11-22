@@ -1,7 +1,0 @@
-{
-  "upstream": "db2325f79481fab87211e5a287580d753f582cb8",
-  "file": "target/loongarch/cpu.c",
-  "before_sha256": "494b92f6575f11e1b1a6c94b96e508305420c2f9a5ac1d9af5d058379dde0d1d",
-  "after_sha256": "ba8bc03608f7f56c1bd5894ac9ff70acd42159717c07e37fe41607ee499da042",
-  "change": "Move PNX into instruction-fetch faults; skip recursive BADI fetch"
-}

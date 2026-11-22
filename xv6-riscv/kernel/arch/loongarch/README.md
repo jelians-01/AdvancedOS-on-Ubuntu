@@ -14,9 +14,9 @@ make ARCH=loongarch qemu DISK2=/path/to/ext2.img DISK3=/path/to/fat32.img \
 
 产物为 `build/loongarch/kernel.elf` 与 `build/loongarch/fs.img`。后者包含 LoongArch 用户程序，不能拿 RISC-V 的 `fs.img` 替代。默认 RISC-V 构建仍用原路径，两个架构的目标文件、内核、用户程序和根镜像互相隔离。
 
-Clang/LLD 18 使用官方 Ubuntu 包的项目内解压副本，默认目录 `/home/jelians/AdvancedOS-tools/llvm18`。换机器时可传 `LA_TOOLS=/your/path/llvm18`，或分别传 `LA_CC`、`LA_LD`。目标是 `loongarch64-unknown-none`、LP64S；代码当前不使用浮点寄存器。
+Clang/LLD 18 使用官方 Ubuntu 包的项目内解压副本，默认目录为仓库内 `tools/llvm18`。换机器时可传 `LA_TOOLS=/your/path/llvm18`，或分别传 `LA_CC`、`LA_LD`。目标是 `loongarch64-unknown-none`、LP64S；代码当前不使用浮点寄存器。
 
-运行配置固定单 CPU、QEMU virt、1 GiB 客体 RAM。内核仅使用低端 128 MiB。PCI 槽位 1/2/3 固定映射逻辑设备 1/2/3：原生根、ext2、FAT32。缺某个数据盘不重编号其它盘。磁盘必须为裸文件系统卷，不能用分区镜像冒充。
+运行配置固定单 CPU、QEMU virt、1 GiB 客体 RAM。内核仅使用低端 128 MiB。PCI 槽位 1/2/3 固定映射逻辑设备 1/2/3：原生根、ext2、FAT32。缺某个数据盘不重编号其它盘。原生根与 ext2 使用裸文件系统卷；FAT32 可使用原始卷或唯一的 MBR FAT32 主分区，具体边界见根目录 README。
 
 ## 平台与公共层边界
 
@@ -45,6 +45,6 @@ testrun /vfsdir
 testrun /usertests
 ```
 
-三文件系统整体验收、重启持久性、缺盘、坏镜像与宿主文件系统检查使用结题目录的统一双平台 runner。每次用可重建的新镜像，完整原生回归与写入演示使用不同根盘副本，避免数据占满根盘后误判。
+三文件系统整体验收、重启持久性、缺盘、坏镜像与宿主文件系统检查参见根目录 VALIDATION.md 中的验收证据；重新验证可使用仓库内 tests 及 demo 的入口。每次用可重建的新镜像，完整原生回归与写入演示使用不同根盘副本，避免数据占满根盘后误判。
 
 `archtest` 不只搜索 PASS：它检查只读代码写入、NX heap 执行和内核地址读取三个子进程均被内核终止，宿主还应检查 `TESTRUN /archtest status=0`。最终是否全部达标，以冻结源码对应的完整验收清单为准。

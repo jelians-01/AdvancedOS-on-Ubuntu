@@ -1,0 +1,71 @@
+{
+  "date": "2026-11-22",
+  "core_source_commit": "9eda7a0316b42de380f4eee5f6129ed48532021d",
+  "scope_note": "Counts are top-level records, not summed individual assertions.",
+  "architectures": {
+    "riscv": {
+      "full-02": {
+        "status": "PASS",
+        "source_commit": "9eda7a0316b42de380f4eee5f6129ed48532021d",
+        "cpu_count": 3,
+        "memory": "128M",
+        "qemu_version": "QEMU emulator version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)",
+        "initial_kernel_sha256": "852cc5bf44398c2be25369d4157c8a2e3020b8f785dd71133a25b2f68974df53",
+        "records": 56
+      },
+      "newfeatures-01": {
+        "status": "PASS",
+        "source_commit": "e937ea9415aa3b116a2c845e7241dd98c0e01772",
+        "cpu_count": 3,
+        "memory": "128M",
+        "qemu_version": "QEMU emulator version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)",
+        "initial_kernel_sha256": "852cc5bf44398c2be25369d4157c8a2e3020b8f785dd71133a25b2f68974df53",
+        "records": 13
+      },
+      "fat32-extra-01": {
+        "status": "PASS",
+        "source_commit": "9eda7a0316b42de380f4eee5f6129ed48532021d",
+        "cpu_count": 3,
+        "memory": "128M",
+        "qemu_version": "QEMU emulator version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)",
+        "initial_kernel_sha256": "852cc5bf44398c2be25369d4157c8a2e3020b8f785dd71133a25b2f68974df53",
+        "records": 6
+      }
+    },
+    "loongarch": {
+      "full-02": {
+        "status": "PASS",
+        "source_commit": "9eda7a0316b42de380f4eee5f6129ed48532021d",
+        "cpu_count": 1,
+        "memory": "1G",
+        "qemu_version": "QEMU emulator version 8.2.2 (AdvancedOS-PNX-db2325f)",
+        "initial_kernel_sha256": "3cd9b58986520443b6a05f64ae37fd5a5b0e99cbb496ac1a44811283f65e6e18",
+        "records": 56
+      },
+      "newfeatures-01": {
+        "status": "PASS",
+        "source_commit": "e937ea9415aa3b116a2c845e7241dd98c0e01772",
+        "cpu_count": 1,
+        "memory": "1G",
+        "qemu_version": "QEMU emulator version 8.2.2 (AdvancedOS-PNX-db2325f)",
+        "initial_kernel_sha256": "3cd9b58986520443b6a05f64ae37fd5a5b0e99cbb496ac1a44811283f65e6e18",
+        "records": 13
+      },
+      "fat32-extra-01": {
+        "status": "PASS",
+        "source_commit": "9eda7a0316b42de380f4eee5f6129ed48532021d",
+        "cpu_count": 1,
+        "memory": "1G",
+        "qemu_version": "QEMU emulator version 8.2.2 (AdvancedOS-PNX-db2325f)",
+        "initial_kernel_sha256": "3cd9b58986520443b6a05f64ae37fd5a5b0e99cbb496ac1a44811283f65e6e18",
+        "records": 6
+      }
+    }
+  },
+  "limitations": [
+    "No userspace mount/umount",
+    "No crash/power-loss recovery",
+    "LoongArch single CPU",
+    "Restricted writable ext2 geometry; 268KiB file/12KiB directory limits"
+  ]
+}
