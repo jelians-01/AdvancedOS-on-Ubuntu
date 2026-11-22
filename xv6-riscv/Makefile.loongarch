@@ -9,7 +9,7 @@ LA_FLAGS := --target=loongarch64-unknown-none -march=loongarch64 -mabi=lp64s -O1
 LA_COMMON := console printf kalloc spinlock string main vm proc syscall sysproc bio fs log sleeplock file vfs vfs_test vfs_mount_test vfs_xv6 ext2 fat32 project_fs pipe exec sysfile blkdev
 LA_PLATFORM := entry swtch vector trap uart plic pci
 LA_OBJS := $(addprefix $(LA_BUILD)/kernel/,$(addsuffix .o,$(LA_COMMON))) $(addprefix $(LA_BUILD)/arch/,$(addsuffix .o,$(LA_PLATFORM)))
-LA_PROGRAMS := archtest ext2write ext2single ext2dirgrow fat32persist fat32missing vfstest1 vfstest2 cat echo forktest grep init kill ln ls mkdir rm sh stressfs usertests vfspath vfsexec vfsdir ext2test fat32test sync testrun threefstest grind wc zombie logstress forphan dorphan
+LA_PROGRAMS := archtest ext2mkdir ext2unlink ext2link fat32fault fat32large fat32vfat fat32vwrite fat32shared fat32mbr fsjoint ext2write ext2single ext2dirgrow fat32persist fat32missing vfstest1 vfstest2 cat echo forktest grep init kill ln ls mkdir rm sh stressfs usertests vfspath vfsexec vfsdir ext2test fat32test sync testrun threefstest grind wc zombie logstress forphan dorphan
 LA_USERS := $(addprefix $(LA_BUILD)/user/_,$(LA_PROGRAMS))
 LA_ULIB := $(addprefix $(LA_BUILD)/user/,ulib.o printf.o umalloc.o usys.o start.o)
 .DELETE_ON_ERROR:

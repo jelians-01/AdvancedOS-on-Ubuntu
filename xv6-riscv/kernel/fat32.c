@@ -1,3 +1,6 @@
+#ifdef FAT32_HOST_TEST
+#include "../tests/fat32_host.h"
+#else
 #include "types.h"
 #include "riscv.h"
 #include "defs.h"
@@ -11,6 +14,7 @@
 #include "vfs_dirent.h"
 #include "vfs_backend.h"
 #include "fat32.h"
+#endif
 
 #define FAT32_EOC       0x0ffffff8U
 #define FAT32_BAD       0x0ffffff7U
@@ -19,11 +23,16 @@
 #define FAT32_EOD       0x00
 #define FAT32_DELETED   0xe5
 #define FAT32_ATTR_LFN  0x0f
+#define FAT32_LFN_MASK  0x3f
+#define FAT32_LFN_LAST  0x40
+#define FAT32_LFN_UNITS 13
+#define FAT32_LFN_SLOTS 20
 #define FAT32_ATTR_VOL  0x08
 #define FAT32_ATTR_DIR  0x10
 #define FAT32_ATTR_FILE 0x20
 #define FAT32_ENTRY_SIZE 32
 #define FAT32_FAT_MASK  0x0fffffffU
+#define FAT32_UNKNOWN   0xffffffffU
 
 struct fat32_fs {
   uint dev;
@@ -40,12 +49,14 @@ struct fat32_fs {
   uint active_fat;
   int mirrored;
   uint64 volume_bytes;
+  uint64 volume_offset; // Physical device offset; all filesystem offsets stay relative.
+  uint64 volume_limit;  // Raw-device size or selected MBR partition length.
   uint64 fat_offset;
   uint64 data_offset;
   uint next_free;
-  uint fsinfo_sector;
-  uint backup_boot_sector;
-  int fsinfo_unknown;
+  uint fsinfo_sector; // Zero disables the optional primary FSInfo record.
+  uint free_count;
+  int fsinfo_dirty;
   struct spinlock nodes_lock;
   struct fat32_node *nodes;
   uint next_delete_id;
@@ -68,11 +79,10 @@ struct fat32_node {
   uint delete_id;
   uint deleted_cluster;
   int deleted;
-  struct fat32_node *next;
-  int refs;
-  // Keep the real parent alive so repeated ".." traversals at any depth
-  // use the same identity and lock, including directories held as cwd.
+  uint refs; // Backend references; VFS may merge several into one vnode.
+  // Hold the real parent so dot-dot preserves directory identity at any depth.
   struct fat32_node *parent;
+  struct fat32_node *next;
 };
 
 struct fat32_entry {
@@ -81,6 +91,29 @@ struct fat32_entry {
   uint first_cluster;
   uint size;
   uchar attributes;
+  int lfn_prefix;
+  uint lfn_count;
+  uint64 first_slot;
+};
+
+// Accumulate the descending slots until the following short entry.
+struct fat32_lfn {
+  ushort units[FAT32_LFN_SLOTS * FAT32_LFN_UNITS];
+  uint slots;
+  uint next;
+  uchar checksum;
+  int present;
+};
+
+struct fat32_name {
+  ushort units[FAT32_LFN_SLOTS * FAT32_LFN_UNITS];
+  uint length;
+  uint count;
+  uchar alias[11];
+  uint64 offsets[FAT32_LFN_SLOTS + 1];
+  uint64 end_marker;
+  uint old_tail;
+  uint added;
 };
 
 // Brent cycle detection state, bounded by the number of data clusters.
@@ -144,7 +177,11 @@ fat32_read_bytes(struct fat32_fs *fs, uint64 offset, void *dst, uint length)
 {
   if(offset > fs->volume_bytes || (uint64)length > fs->volume_bytes - offset)
     return -1;
-  return blk_read(fs->dev, offset, dst, length);
+  if(blk_read(fs->dev, fs->volume_offset + offset, dst, length) < 0){
+    fs->write_failed = 1;
+    return -1;
+  }
+  return 0;
 }
 
 static int
@@ -154,9 +191,36 @@ fat32_write_bytes(struct fat32_fs *fs, uint64 offset, const void *src,
   if(fs->write_failed || offset > fs->volume_bytes ||
      (uint64)length > fs->volume_bytes - offset)
     return -1;
-  if(blk_write(fs->dev, offset, src, length) < 0){
+  if(blk_write(fs->dev, fs->volume_offset + offset, src, length) < 0){
     fs->write_failed = 1;
     return -1;
+  }
+  return 0;
+}
+
+static int
+fat32_flush(struct fat32_fs *fs)
+{
+  uchar hints[8];
+  if(fs->write_failed)
+    return -1;
+  // Persist FAT/data updates before publishing their allocation hints.
+  if(blk_flush(fs->dev) < 0){
+    fs->write_failed = 1;
+    return -1;
+  }
+  if(fs->fsinfo_sector && fs->fsinfo_dirty){
+    fat32_put32(hints, fs->free_count);
+    fat32_put32(hints + 4, fs->next_free >= 2 && fs->next_free <= fs->max_cluster ?
+                              fs->next_free : FAT32_UNKNOWN);
+    if(fat32_write_bytes(fs, (uint64)fs->fsinfo_sector * fs->bytes_per_sector + 488,
+                         hints, sizeof(hints)) < 0)
+      return -1;
+    if(blk_flush(fs->dev) < 0){
+      fs->write_failed = 1;
+      return -1;
+    }
+    fs->fsinfo_dirty = 0;
   }
   return 0;
 }
@@ -214,62 +278,13 @@ fat32_next(struct fat32_fs *fs, uint cluster, uint *next)
   return 1;
 }
 
-// FSInfo allocation counts are optional hints. Invalidate both valid copies
-// before changing the FAT so a standard formatter's cached count cannot become
-// stale. Unknown (0xffffffff) is defined by FAT32 and fsck accepts it.
-static int
-fat32_invalidate_fsinfo(struct fat32_fs *fs)
-{
-  if(fs->fsinfo_unknown)
-    return 0;
-  if(fs->fsinfo_sector == 0){
-    fs->fsinfo_unknown = 1;
-    return 0;
-  }
-  uchar *raw = kalloc();
-  if(raw == 0)
-    return -1;
-  int r = 0;
-  for(int backup = 0; backup < 2; backup++){
-    uint sector = fs->fsinfo_sector;
-    if(backup){
-      if(fs->backup_boot_sector == 0)
-        break;
-      sector += fs->backup_boot_sector;
-      if(sector >= fs->reserved_sectors)
-        break;
-    }
-    uint64 off = (uint64)sector * fs->bytes_per_sector;
-    if(fat32_read_bytes(fs, off, raw, 512) < 0){
-      r = -1;
-      break;
-    }
-    if(fat32_get32(raw) != 0x41615252 ||
-       fat32_get32(raw + 484) != 0x61417272 ||
-       fat32_get32(raw + 508) != 0xaa550000)
-      continue;
-    fat32_put32(raw + 488, 0xffffffff);
-    fat32_put32(raw + 492, 0xffffffff);
-    if(fat32_write_bytes(fs, off, raw, 512) < 0){
-      r = -1;
-      break;
-    }
-  }
-  kfree(raw);
-  if(r == 0)
-    fs->fsinfo_unknown = 1;
-  return r;
-}
-
 static int
 fat32_write_fat_value(struct fat32_fs *fs, uint cluster, uint value)
 {
   uchar raw[4];
-  uint copies, first;
-  if(cluster < 2 || cluster > fs->max_cluster ||
-     fat32_invalidate_fsinfo(fs) < 0)
+  uint copies, first, old = 0;
+  if(cluster < 2 || cluster > fs->max_cluster)
     return -1;
-  fat32_put32(raw, value & FAT32_FAT_MASK);
   if(fs->mirrored){
     copies = fs->fat_count;
     first = 0;
@@ -281,8 +296,29 @@ fat32_write_fat_value(struct fat32_fs *fs, uint cluster, uint value)
     uint64 offset = ((uint64)fs->reserved_sectors +
                      (uint64)(first + i) * fs->fat_sectors) *
                     fs->bytes_per_sector + (uint64)cluster * 4;
+    if(fat32_read_bytes(fs, offset, raw, sizeof(raw)) < 0){
+      fs->write_failed = 1;
+      return -1;
+    }
+    if(i == 0)
+      old = fat32_get32(raw) & FAT32_FAT_MASK;
+    // Only the low 28 bits belong to the cluster chain.
+    fat32_put32(raw, (fat32_get32(raw) & ~FAT32_FAT_MASK) |
+                     (value & FAT32_FAT_MASK));
     if(fat32_write_bytes(fs, offset, raw, sizeof(raw)) < 0)
       return -1;
+  }
+  // Account transitions once, only after all required FAT copies succeeded.
+  // FSInfo is a hint, never an authority for ENOSPC or a cluster's ownership.
+  if(fs->fsinfo_sector && ((old == 0) != ((value & FAT32_FAT_MASK) == 0))){
+    if(fs->free_count != FAT32_UNKNOWN){
+      if(old == 0)
+        fs->free_count = fs->free_count ? fs->free_count - 1 : FAT32_UNKNOWN;
+      else
+        fs->free_count = fs->free_count < fs->cluster_count ?
+                           fs->free_count + 1 : FAT32_UNKNOWN;
+    }
+    fs->fsinfo_dirty = 1;
   }
   return 0;
 }
@@ -328,13 +364,13 @@ fat32_zero_cluster(struct fat32_fs *fs, uint cluster)
   if(buf == 0 || fat32_cluster_offset(fs, cluster, &offset) < 0)
     goto done;
   memset(buf, 0, PGSIZE);
-  for(uint written = 0; written < fs->cluster_bytes;){
-    uint take = fs->cluster_bytes - written;
+  for(uint pos = 0; pos < fs->cluster_bytes;){
+    uint take = fs->cluster_bytes - pos;
     if(take > PGSIZE)
       take = PGSIZE;
-    if(fat32_write_bytes(fs, offset + written, buf, take) < 0)
+    if(fat32_write_bytes(fs, offset + pos, buf, take) < 0)
       goto done;
-    written += take;
+    pos += take;
   }
   r = 0;
 done:
@@ -364,8 +400,7 @@ fat32_alloc_cluster(struct fat32_fs *fs, uint *out_cluster)
       if(fat32_write_fat_value(fs, cluster, FAT32_EOC) < 0)
         return -1;
       if(fat32_zero_cluster(fs, cluster) < 0){
-        if(!fs->write_failed && fat32_write_fat_value(fs, cluster, 0) < 0)
-          fs->write_failed = 1;
+        fat32_write_fat_value(fs, cluster, 0);
         return -1;
       }
       fs->next_free = cluster == fs->max_cluster ? 2 : cluster + 1;
@@ -400,7 +435,11 @@ fat32_free_chain(struct fat32_fs *fs, uint first)
   }
   if(current != 0)
     return -1;
-  fs->next_free = 2;
+  if(first >= 2){
+    fs->next_free = first;
+    if(fs->fsinfo_sector)
+      fs->fsinfo_dirty = 1;
+  }
   return 0;
 }
 
@@ -435,6 +474,17 @@ fat32_chain_length(struct fat32_fs *fs, uint first, uint *tail, uint *count)
   return 0;
 }
 
+// Check the whole chain before changing it, including that it can hold size.
+static int
+fat32_file_chain(struct fat32_fs *fs, uint first, uint size,
+                 uint *tail, uint *count)
+{
+  if(fat32_chain_length(fs, first, tail, count) < 0 ||
+     (uint64)*count * fs->cluster_bytes < size)
+    return -1;
+  return 0;
+}
+
 static int
 fat32_append_cluster(struct fat32_fs *fs, uint tail, uint *out_cluster)
 {
@@ -443,12 +493,102 @@ fat32_append_cluster(struct fat32_fs *fs, uint tail, uint *out_cluster)
   if(fat32_alloc_cluster(fs, &cluster) < 0)
     return -1;
   if(tail != 0 && fat32_write_fat_value(fs, tail, cluster) < 0){
-    // The tail update may have reached some FAT copies. Keep the new cluster
-    // allocated rather than freeing storage that a live chain may reference.
-    fs->write_failed = 1;
+    fat32_write_fat_value(fs, cluster, 0);
     return -1;
   }
   *out_cluster = cluster;
+  return 0;
+}
+
+// Invalid/absent optional hints are ignored, not repaired during mounting.
+static int
+fat32_load_fsinfo(struct fat32_fs *fs, uint sector)
+{
+  uchar *info;
+  fs->next_free = 2;
+  fs->free_count = FAT32_UNKNOWN;
+  fs->fsinfo_sector = 0;
+  fs->fsinfo_dirty = 0;
+  if(sector == 0 || sector == 0xffff || sector >= fs->reserved_sectors)
+    return 0;
+  info = kalloc();
+  if(info == 0)
+    return -1;
+  if(fat32_read_bytes(fs, (uint64)sector * fs->bytes_per_sector, info, 512) < 0){
+    kfree(info);
+    return -1;
+  }
+  if(fat32_get32(info) == 0x41615252U &&
+     fat32_get32(info + 484) == 0x61417272U &&
+     fat32_get32(info + 508) == 0xaa550000U){
+    uint count = fat32_get32(info + 488);
+    uint next = fat32_get32(info + 492);
+    fs->fsinfo_sector = sector;
+    if(count <= fs->cluster_count)
+      fs->free_count = count;
+    if(next >= 2 && next <= fs->max_cluster)
+      fs->next_free = next;
+  }
+  kfree(info);
+  return 0;
+}
+
+// Recognize a FAT32 BPB before interpreting the tail of a raw boot sector as
+// an MBR. Actual geometry, version and chain checks still happen below.
+static int
+fat32_raw_bpb(const uchar *boot)
+{
+  uint bps = fat32_get16(boot + 11);
+  return fat32_power_of_two(bps) && bps >= 512 && bps <= PGSIZE &&
+    fat32_power_of_two(boot[13]) && boot[13] <= 128 &&
+    fat32_get16(boot + 14) != 0 && boot[16] >= 1 && boot[16] <= 8 &&
+    fat32_get16(boot + 17) == 0 && fat32_get16(boot + 22) == 0 &&
+    fat32_get32(boot + 36) != 0;
+}
+
+// D1/VirtIO disk sectors are 512 bytes. Support one unambiguous FAT32 primary
+// partition (0B/0C), not GPT, extended/logical partitions, or hybrid layouts.
+static int
+fat32_select_volume(struct fat32_fs *fs, uchar *boot, uint64 device_bytes)
+{
+  uint64 starts[4] = {0}, lengths[4] = {0};
+  int selected = -1;
+  fs->volume_offset = 0;
+  fs->volume_limit = device_bytes;
+  if(fat32_raw_bpb(boot))
+    return 0;
+  for(uint i = 0; i < 4; i++){
+    const uchar *part = boot + 446 + i * 16;
+    uint type = part[4], lba = fat32_get32(part + 8);
+    uint sectors = fat32_get32(part + 12);
+    if(type == 0){
+      if(part[0] || lba || sectors)
+        return -1;
+      continue;
+    }
+    if((part[0] != 0 && part[0] != 0x80) || type == 0xee || !lba || !sectors)
+      return -1;
+    starts[i] = (uint64)lba * 512;
+    lengths[i] = (uint64)sectors * 512;
+    if(starts[i] > device_bytes || lengths[i] > device_bytes - starts[i])
+      return -1;
+    for(uint j = 0; j < i; j++)
+      if(lengths[j] && starts[i] < starts[j] + lengths[j] &&
+         starts[j] < starts[i] + lengths[i])
+        return -1;
+    if(type == 0x0b || type == 0x0c){
+      if(selected != -1)
+        return -1;
+      selected = i;
+    }
+  }
+  if(selected == -1)
+    return -1;
+  fs->volume_offset = starts[selected];
+  fs->volume_limit = lengths[selected];
+  if(blk_read(fs->dev, fs->volume_offset, boot, 512) < 0 ||
+     boot[510] != 0x55 || boot[511] != 0xaa)
+    return -1;
   return 0;
 }
 
@@ -459,6 +599,8 @@ fat32_load(struct fat32_fs *fs)
   uint total16, total32, fat16, fat32, root_entries, ext_flags;
   uint64 overhead, fat_bytes, fat_entries, device_bytes;
   uint data_sectors;
+  uint root_tail, root_clusters;
+  uint info_sector;
 
   if(blk_size(fs->dev, &device_bytes) < 0 || device_bytes < 512)
     return -1;
@@ -466,7 +608,8 @@ fat32_load(struct fat32_fs *fs)
   if(boot == 0)
     return -1;
   if(blk_read(fs->dev, 0, boot, 512) < 0 ||
-     boot[510] != 0x55 || boot[511] != 0xaa){
+     boot[510] != 0x55 || boot[511] != 0xaa ||
+     fat32_select_volume(fs, boot, device_bytes) < 0){
     kfree(boot);
     return -1;
   }
@@ -481,19 +624,16 @@ fat32_load(struct fat32_fs *fs)
   fat32 = fat32_get32(boot + 36);
   ext_flags = fat32_get16(boot + 40);
   fs->root_cluster = fat32_get32(boot + 44) & 0x0fffffffU;
-  fs->fsinfo_sector = fat32_get16(boot + 48);
-  fs->backup_boot_sector = fat32_get16(boot + 50);
-  if(fs->fsinfo_sector >= fs->reserved_sectors)
-    fs->fsinfo_sector = 0;
-  if(fs->backup_boot_sector >= fs->reserved_sectors)
-    fs->backup_boot_sector = 0;
+  info_sector = fat32_get16(boot + 48);
   if(fat32_get16(boot + 42) != 0 || (ext_flags & 0xff70U) != 0 ||
      !fat32_power_of_two(fs->bytes_per_sector) ||
      fs->bytes_per_sector < 512 || fs->bytes_per_sector > PGSIZE ||
      !fat32_power_of_two(fs->sectors_per_cluster) ||
      fs->sectors_per_cluster > 128 || fs->reserved_sectors == 0 ||
      fs->fat_count == 0 || fs->fat_count > 8 || root_entries != 0 ||
-     fat16 != 0 || fat32 == 0 || fat32_get32(boot + 28) != 0 ||
+     fat16 != 0 || fat32 == 0 ||
+     (fat32_get32(boot + 28) != 0 &&
+      (uint64)fat32_get32(boot + 28) * 512 != fs->volume_offset) ||
      (total16 != 0 && total32 != 0)){
     kfree(boot);
     return -1;
@@ -517,7 +657,7 @@ fat32_load(struct fat32_fs *fs)
   fs->volume_bytes = (uint64)fs->total_sectors * fs->bytes_per_sector;
   overhead = (uint64)fs->reserved_sectors +
              (uint64)fs->fat_count * fs->fat_sectors;
-  if(fs->volume_bytes > device_bytes || overhead >= fs->total_sectors)
+  if(fs->volume_bytes > fs->volume_limit || overhead >= fs->total_sectors)
     return -1;
   data_sectors = fs->total_sectors - overhead;
   fs->cluster_count = data_sectors / fs->sectors_per_cluster;
@@ -537,7 +677,10 @@ fat32_load(struct fat32_fs *fs)
   fs->data_offset = ((uint64)fs->reserved_sectors +
                      (uint64)fs->fat_count * fs->fat_sectors) *
                     fs->bytes_per_sector;
-  fs->next_free = 2;
+  if(fat32_chain_length(fs, fs->root_cluster, &root_tail, &root_clusters) < 0)
+    return -1;
+  if(fat32_load_fsinfo(fs, info_sector) < 0)
+    return -1;
   initsleeplock(&fs->write_lock, "fat32write");
   return 0;
 }
@@ -631,18 +774,145 @@ fat32_name_equal(const uchar raw[11], const uchar wanted[11])
   return 1;
 }
 
+static int
+fat32_lfn_slot(const uchar *raw)
+{
+  return raw[0] != FAT32_DELETED &&
+         (raw[11] & FAT32_LFN_MASK) == FAT32_ATTR_LFN;
+}
+
+static void
+fat32_lfn_push(struct fat32_lfn *lfn, const uchar *raw)
+{
+  static const uchar offsets[FAT32_LFN_UNITS] =
+    {1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30};
+  uint ordinal = raw[0] & 0x1f;
+
+  lfn->present = 1;
+  if((raw[0] & 0xa0) || ordinal == 0 || ordinal > FAT32_LFN_SLOTS ||
+     raw[12] != 0 || fat32_get16(raw + 26) != 0){
+    lfn->slots = 0;
+    return;
+  }
+  if(raw[0] & FAT32_LFN_LAST){
+    lfn->slots = lfn->next = ordinal;
+    lfn->checksum = raw[13];
+  }
+  if(!lfn->slots || ordinal != lfn->next || raw[13] != lfn->checksum){
+    lfn->slots = 0;
+    return;
+  }
+  for(uint i = 0; i < FAT32_LFN_UNITS; i++)
+    lfn->units[(ordinal - 1) * FAT32_LFN_UNITS + i] =
+      fat32_get16(raw + offsets[i]);
+  lfn->next--;
+}
+
+static int
+fat32_lfn_forbidden(uint cp)
+{
+  static const char forbidden[] = "\"*/:<>?\\|";
+  if(cp < 0x20 || cp == 0xfffe || cp == 0xffff)
+    return 1;
+  for(uint i = 0; forbidden[i]; i++)
+    if(cp == (uchar)forbidden[i])
+      return 1;
+  return 0;
+}
+
+// Return UTF-8 length, or zero to fall back to the short alias. Never emit
+// a truncated name, an invalid surrogate pair, or a path separator.
+static uint
+fat32_lfn_name(const struct fat32_lfn *lfn, const uchar *alias, char *out)
+{
+  uchar sum = 0;
+  uint length = 0, units = lfn->slots * FAT32_LFN_UNITS;
+  uint end = units;
+
+  if(!lfn->slots || lfn->next != 0)
+    return 0;
+  for(uint i = 0; i < 11; i++)
+    sum = ((sum >> 1) | ((sum & 1) << 7)) + alias[i];
+  if(sum != lfn->checksum)
+    return 0;
+  for(uint i = 0; i < units; i++){
+    if(lfn->units[i] == 0){
+      if(i <= units - FAT32_LFN_UNITS)
+        return 0;
+      end = i;
+      for(uint j = i + 1; j < units; j++)
+        if(lfn->units[j] != 0xffff)
+          return 0;
+      break;
+    }
+  }
+  if(end > 255)
+    return 0;
+  for(uint i = 0; i < end; i++){
+    uint cp = lfn->units[i];
+    if(cp >= 0xd800 && cp <= 0xdbff){
+      if(i + 1 == end || lfn->units[i + 1] < 0xdc00 ||
+         lfn->units[i + 1] > 0xdfff)
+        return 0;
+      cp = 0x10000 + ((cp - 0xd800) << 10) + (lfn->units[++i] - 0xdc00);
+    } else if((cp >= 0xdc00 && cp <= 0xdfff) || fat32_lfn_forbidden(cp)){
+      return 0;
+    }
+    uint bytes = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    if(length + bytes > VFS_NAME_MAX)
+      return 0;
+    if(bytes == 1){
+      out[length] = cp;
+    } else {
+      static const uchar lead[] = {0, 0, 0xc0, 0xe0, 0xf0};
+      for(uint j = bytes - 1; j > 0; j--){
+        out[length + j] = 0x80 | (cp & 0x3f);
+        cp >>= 6;
+      }
+      out[length] = lead[bytes] | cp;
+    }
+    length += bytes;
+  }
+  if(length != 0 && out[length - 1] != '.' && out[length - 1] != ' '){
+    out[length] = 0;
+    return length;
+  }
+  return 0;
+}
+
+static int
+fat32_lfn_equal(const char *a, const char *b, uint len)
+{
+  for(uint i = 0; i < len; i++){
+    uchar x = a[i], y = b[i];
+    if(x >= 'a' && x <= 'z')
+      x -= 'a' - 'A';
+    if(y >= 'a' && y <= 'z')
+      y -= 'a' - 'A';
+    if(x != y)
+      return 0;
+  }
+  return 1;
+}
+
 // Return 0 and fill entry, 1 if absent, or -1 for malformed data/I/O.
 static int
-fat32_find_entry(struct fat32_node *dir, const uchar wanted[11],
+fat32_find_entry(struct fat32_node *dir, const char *name, uint len,
                  struct fat32_entry *entry)
 {
   struct fat32_fs *fs = dir->fs;
   uchar *sector = kalloc();
+  uchar wanted[11];
+  char long_name[VFS_NAME_MAX + 1];
+  struct fat32_lfn lfn = {0};
   struct fat32_chain chain;
   uint current = dir->first_cluster;
+  uint64 slot_index = 0;
+  int short_ok = fat32_short_name(name, len, wanted) == 0;
   int result = -1;
 
-  if(sector == 0 || (dir->attributes & FAT32_ATTR_DIR) == 0)
+  if(sector == 0 || len == 0 || len > VFS_NAME_MAX ||
+     (dir->attributes & FAT32_ATTR_DIR) == 0)
     goto done;
   if(current < 2 || current > fs->max_cluster)
     goto done;
@@ -659,18 +929,30 @@ fat32_find_entry(struct fat32_node *dir, const uchar wanted[11],
       for(uint pos = 0; pos < fs->bytes_per_sector;
           pos += FAT32_ENTRY_SIZE){
         uchar *raw = sector + pos;
+        uint64 this_slot = slot_index++;
         if(raw[0] == FAT32_EOD){
           result = 1;
           goto done;
         }
-        if(raw[0] == FAT32_DELETED || raw[11] == FAT32_ATTR_LFN ||
-           (raw[11] & FAT32_ATTR_VOL) || raw[0] == '.')
+        if(fat32_lfn_slot(raw)){
+          fat32_lfn_push(&lfn, raw);
           continue;
-        if(fat32_name_equal(raw, wanted)){
-          fat32_decode_entry(raw, sector_off + pos, entry);
-          result = 0;
-          goto done;
         }
+        if(raw[0] != FAT32_DELETED && !(raw[11] & FAT32_ATTR_VOL) &&
+           raw[0] != '.'){
+          uint long_len = fat32_lfn_name(&lfn, raw, long_name);
+          if((short_ok && fat32_name_equal(raw, wanted)) ||
+             (long_len == len &&
+              fat32_lfn_equal(long_name, name, len))){
+            fat32_decode_entry(raw, sector_off + pos, entry);
+            entry->lfn_prefix = lfn.present;
+            entry->lfn_count = long_len ? lfn.slots : 0;
+            entry->first_slot = this_slot - entry->lfn_count;
+            result = 0;
+            goto done;
+          }
+        }
+        lfn.present = lfn.slots = 0;
       }
     }
     uint next;
@@ -708,21 +990,20 @@ fat32_slot_deferred(struct fat32_fs *fs, uint64 offset)
   return deferred;
 }
 
+// Reserve a run of deleted/end slots, growing the directory if necessary.
+// The caller holds write_lock and has not published any entry yet.
 static int
-fat32_find_slot(struct fat32_node *dir, uint64 *slot_offset, uint *tail)
+fat32_name_slots(struct fat32_node *dir, struct fat32_name *name)
 {
   struct fat32_fs *fs = dir->fs;
   uchar *sector = kalloc();
-  struct fat32_chain chain;
   uint current = dir->first_cluster;
-  int result = -1;
+  uint clusters, run = 0, needed = name->count + 1;
+  int result = -1, end_seen = 0;
 
-  *slot_offset = 0;
-  *tail = 0;
-  if(sector == 0 || (dir->attributes & FAT32_ATTR_DIR) == 0 ||
-     current < 2 || current > fs->max_cluster)
+  if(sector == 0 ||
+     fat32_chain_length(fs, current, &name->old_tail, &clusters) < 0)
     goto done;
-  fat32_chain_init(&chain, current);
   for(;;){
     uint64 cluster_off;
     if(fat32_cluster_offset(fs, current, &cluster_off) < 0)
@@ -734,30 +1015,43 @@ fat32_find_slot(struct fat32_node *dir, uint64 *slot_offset, uint *tail)
         goto done;
       for(uint pos = 0; pos < fs->bytes_per_sector;
           pos += FAT32_ENTRY_SIZE){
-        uchar first = sector[pos];
-        if(first == FAT32_EOD){
-          *slot_offset = sector_off + pos;
-          result = 0;
-          goto done;
-        }
-        if(first == FAT32_DELETED){
-          uint64 candidate = sector_off + pos;
-          if(!fat32_slot_deferred(fs, candidate)){
-            *slot_offset = candidate;
+        uint64 candidate = sector_off + pos;
+        if(sector[pos] == FAT32_EOD)
+          end_seen = 1;
+        if((end_seen || sector[pos] == FAT32_DELETED) &&
+           !fat32_slot_deferred(fs, candidate)){
+          name->offsets[run++] = candidate;
+          if(run == needed){
+            // Keep a terminator after newly consumed end slots, even if
+            // that terminator lives in the next physical cluster.
+            if(end_seen){
+              if(in_cluster + pos + FAT32_ENTRY_SIZE < fs->cluster_bytes)
+                name->end_marker = candidate + FAT32_ENTRY_SIZE;
+              else {
+                uint next;
+                int more = fat32_next(fs, current, &next);
+                if(more < 0)
+                  goto done;
+                if(more && fat32_cluster_offset(fs, next, &name->end_marker) < 0)
+                  goto done;
+              }
+            }
             result = 0;
             goto done;
           }
-        }
+        } else
+          run = 0;
       }
     }
     uint next;
-    int r = fat32_chain_advance(fs, &chain, current, &next);
+    int r = fat32_next(fs, current, &next);
     if(r < 0)
       goto done;
     if(r == 0){
-      *tail = current;
-      result = 1;
-      goto done;
+      if(fat32_append_cluster(fs, current, &next) < 0)
+        goto done;
+      if(name->added == 0)
+        name->added = next;
     }
     current = next;
   }
@@ -765,6 +1059,122 @@ done:
   if(sector)
     kfree(sector);
   return result;
+}
+
+// Decode only canonical UTF-8. Keep creation and lookup in the same UTF-16
+// domain; never store separators, overlong encodings, or lone surrogates.
+static int
+fat32_plan_name(struct fat32_node *dir, const char *text, uint len,
+                 struct fat32_name *name)
+{
+  uint count = 0;
+  for(uint i = 0; i < len;){
+    uint cp = (uchar)text[i++], rest = 0, minimum = 0;
+    if(cp >= 0x80){
+      if(cp >= 0xc2 && cp <= 0xdf){
+        rest = 1; minimum = 0x80; cp &= 0x1f;
+      } else if(cp >= 0xe0 && cp <= 0xef){
+        rest = 2; minimum = 0x800; cp &= 0x0f;
+      } else if(cp >= 0xf0 && cp <= 0xf4){
+        rest = 3; minimum = 0x10000; cp &= 7;
+      } else
+        return -1;
+      if(i + rest > len)
+        return -1;
+      while(rest--){
+        uint next = (uchar)text[i++];
+        if((next & 0xc0) != 0x80)
+          return -1;
+        cp = (cp << 6) | (next & 0x3f);
+      }
+      if(cp < minimum || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff))
+        return -1;
+    }
+    if(fat32_lfn_forbidden(cp))
+      return -1;
+    if(count + (cp > 0xffff ? 2 : 1) > 255)
+      return -1;
+    if(cp > 0xffff){
+      cp -= 0x10000;
+      name->units[count++] = 0xd800 | (cp >> 10);
+      name->units[count++] = 0xdc00 | (cp & 0x3ff);
+    } else
+      name->units[count++] = cp;
+  }
+  if(!count || text[len - 1] == '.' || text[len - 1] == ' ')
+    return -1;
+  name->length = count;
+  if(fat32_short_name(text, len, name->alias) == 0)
+    return 0;
+  name->count = (count + FAT32_LFN_UNITS - 1) / FAT32_LFN_UNITS;
+  if(count % FAT32_LFN_UNITS){
+    name->units[count++] = 0;
+    while(count % FAT32_LFN_UNITS)
+      name->units[count++] = 0xffff;
+  }
+
+  // Generate a deterministic ASCII alias, shortening its prefix as the
+  // decimal suffix grows. Check against both aliases and existing long names.
+  uchar base[8], ext[3];
+  uint base_len = 0, dot = len;
+  for(uint i = 0; i < len; i++)
+    if(text[i] == '.')
+      dot = i;
+  for(uint i = 0; i < dot && base_len < sizeof(base); i++){
+    uchar c = text[i];
+    if(c == '.' || c == ' ')
+      continue;
+    if(c >= 'a' && c <= 'z')
+      c -= 'a' - 'A';
+    base[base_len++] = ((c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') || fat32_allowed_char(c)) ? c : '_';
+  }
+  if(!base_len)
+    base[base_len++] = '_';
+  memset(ext, ' ', sizeof(ext));
+  for(uint i = dot + 1, j = 0; i < len && j < sizeof(ext); i++, j++){
+    uchar c = text[i];
+    if(c >= 'a' && c <= 'z')
+      c -= 'a' - 'A';
+    ext[j] = ((c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || fat32_allowed_char(c)) ? c : '_';
+  }
+  for(uint serial = 1; serial <= 999999; serial++){
+    char digits[6], alias_text[13];
+    uint n = 0, value = serial;
+    struct fat32_entry existing;
+    do {
+      digits[n++] = '0' + value % 10;
+      value /= 10;
+    } while(value);
+    uint prefix = 7 - n;
+    if(prefix > base_len)
+      prefix = base_len;
+    memset(name->alias, ' ', sizeof(name->alias));
+    memmove(name->alias, base, prefix);
+    name->alias[prefix] = '~';
+    for(uint j = 0; j < n; j++)
+      name->alias[prefix + 1 + j] = digits[n - 1 - j];
+    memmove(name->alias + 8, ext, sizeof(ext));
+    fat32_format_name(name->alias, alias_text);
+    int found = fat32_find_entry(dir, alias_text, strlen(alias_text), &existing);
+    if(found == 1)
+      return 0;
+    if(found < 0)
+      return -1;
+  }
+  return -1;
+}
+
+static void
+fat32_cancel_name(struct fat32_fs *fs, struct fat32_name *name)
+{
+  if(!fs->write_failed && name->added){
+    if(fat32_write_fat_value(fs, name->old_tail, FAT32_EOC) < 0 ||
+       fat32_flush(fs) < 0 ||
+       fat32_free_chain(fs, name->added) < 0 || fat32_flush(fs) < 0)
+      fs->write_failed = 1;
+  }
 }
 
 // Return 1 if a directory contains only its required dot entries, 0 if it
@@ -833,7 +1243,7 @@ fat32_directory_empty(struct fat32_fs *fs, uint first_cluster,
     if(r < 0)
       goto done;
     if(r == 0){
-      result = found_dot && found_dotdot ? 1 : -1;
+      result = 1;
       goto done;
     }
     current = next;
@@ -853,15 +1263,55 @@ fat32_store_entry(struct fat32_fs *fs, uint64 offset, uint first_cluster,
   if(offset > fs->volume_bytes ||
      (uint64)sizeof(raw) > fs->volume_bytes - offset)
     return -1;
-  if(fat32_read_bytes(fs, offset, raw, sizeof(raw)) < 0)
-    return -1;
-  if(name != 0)
+  if(name != 0){
+    memset(raw, 0, sizeof(raw));
     memmove(raw, name, 11);
+  } else if(fat32_read_bytes(fs, offset, raw, sizeof(raw)) < 0)
+    return -1;
   raw[11] = attributes;
   fat32_put16(raw + 20, first_cluster >> 16);
   fat32_put16(raw + 26, first_cluster);
   fat32_put32(raw + 28, size);
   return fat32_write_bytes(fs, offset, raw, sizeof(raw));
+}
+
+// Publish the short entry last: incomplete long slots cannot expose a file.
+static int
+fat32_publish_name(struct fat32_node *dir, struct fat32_name *name,
+                    uint cluster, uchar attributes)
+{
+  struct fat32_fs *fs = dir->fs;
+  static const uchar offsets[FAT32_LFN_UNITS] =
+    {1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30};
+  uchar raw[FAT32_ENTRY_SIZE], sum = 0;
+  if(fat32_name_slots(dir, name) < 0){
+    fat32_cancel_name(fs, name);
+    return -1;
+  }
+  if(name->end_marker){
+    memset(raw, 0, sizeof(raw));
+    if(fat32_write_bytes(fs, name->end_marker, raw, sizeof(raw)) < 0)
+      return -1;
+  }
+  for(uint i = 0; i < 11; i++)
+    sum = ((sum >> 1) | ((sum & 1) << 7)) + name->alias[i];
+  for(uint i = 0; i < name->count; i++){
+    uint ordinal = name->count - i;
+    memset(raw, 0, sizeof(raw));
+    raw[0] = ordinal | (i == 0 ? FAT32_LFN_LAST : 0);
+    raw[11] = FAT32_ATTR_LFN;
+    raw[13] = sum;
+    for(uint j = 0; j < FAT32_LFN_UNITS; j++)
+      fat32_put16(raw + offsets[j], name->units[(ordinal - 1) * FAT32_LFN_UNITS + j]);
+    if(fat32_write_bytes(fs, name->offsets[i], raw, sizeof(raw)) < 0)
+      return -1;
+  }
+  if(fat32_store_entry(fs, name->offsets[name->count], cluster, 0,
+                       name->alias, attributes) < 0 || fat32_flush(fs) < 0){
+    fs->write_failed = 1;
+    return -1;
+  }
+  return 0;
 }
 
 static struct fat32_node *
@@ -1030,7 +1480,7 @@ fat32_extend_chain(struct fat32_node *node, uint needed,
 
   *added_first = 0;
   *old_tail = 0;
-  if(fat32_chain_length(fs, node->first_cluster, &tail, &count) < 0)
+  if(fat32_file_chain(fs, node->first_cluster, node->size, &tail, &count) < 0)
     return -1;
   if(count >= needed)
     return 0;
@@ -1059,20 +1509,18 @@ fat32_rollback_extension(struct fat32_node *node, uint added_first,
                          uint old_tail)
 {
   struct fat32_fs *fs = node->fs;
-
   if(fs->write_failed)
     return -1;
   if(added_first == 0)
     return 0;
-  // Persist detachment before freeing any cluster. A failed tail update or
-  // flush leaves an uncertain live reference: retain the chain and fail closed.
+  // Confirm detachment before freeing storage that a persisted tail may reach.
   if(old_tail != 0 &&
      (fat32_write_fat_value(fs, old_tail, FAT32_EOC) < 0 ||
-      blk_flush(fs->dev) < 0)){
+      fat32_flush(fs) < 0)){
     fs->write_failed = 1;
     return -1;
   }
-  if(fat32_free_chain(fs, added_first) < 0 || blk_flush(fs->dev) < 0){
+  if(fat32_free_chain(fs, added_first) < 0 || fat32_flush(fs) < 0){
     fs->write_failed = 1;
     return -1;
   }
@@ -1090,15 +1538,13 @@ fat32_write_at(void *data, int user_src, uint64 src, uint off, uint n)
   uchar *buf = 0;
   uint old_size, old_first, added_first, old_tail;
   uint64 end;
-  uint needed, current, position, total = 0;
+  uint current, position, total = 0;
   int result = -1, fatal = 0;
 
   if((node->attributes & FAT32_ATTR_DIR) != 0 || n == 0)
     return n == 0 ? 0 : -1;
-  if((uint64)n > 0xffffffffULL - off)
-    return -1;
   end = (uint64)off + n;
-  if(end > 0xffffffffULL || fs->cluster_bytes == 0)
+  if(end > 0xffffffffULL)
     return -1;
 
   acquiresleep(&fs->write_lock);
@@ -1107,20 +1553,22 @@ fat32_write_at(void *data, int user_src, uint64 src, uint off, uint n)
   old_first = node->first_cluster;
   added_first = 0;
   old_tail = 0;
-  if(fs->write_failed || node->deleted || off > node->size)
+  if(fs->write_failed || node->deleted || off > old_size)
     goto done;
-  buf = kalloc();
-  if(buf == 0)
-    goto done;
-  // Validate the whole source before allocating disk space or writing data.
-  // This keeps invalid user ranges from partially changing a file.
-  for(uint copied = 0; copied < n;){
-    uint amount = n - copied;
-    if(amount > PGSIZE)
-      amount = PGSIZE;
-    if(fat32_copy_in(user_src, buf, src + copied, amount) < 0)
+  // Validate user memory before changing any existing bytes or allocations.
+  // Trusted kernel buffers retain the normal allocation/fault-injection path.
+  if(user_src){
+    buf = kalloc();
+    if(buf == 0)
       goto done;
-    copied += amount;
+    for(uint copied = 0; copied < n;){
+      uint amount = n - copied;
+      if(amount > PGSIZE)
+        amount = PGSIZE;
+      if(fat32_copy_in(user_src, buf, src + copied, amount) < 0)
+        goto done;
+      copied += amount;
+    }
   }
   if(fat32_extend_chain(node,
        (uint)((end + fs->cluster_bytes - 1) / fs->cluster_bytes),
@@ -1129,9 +1577,11 @@ fat32_write_at(void *data, int user_src, uint64 src, uint off, uint n)
       node->first_cluster = old_first;
     goto done;
   }
-  needed = (uint)((end + fs->cluster_bytes - 1) / fs->cluster_bytes);
-  if(needed == 0)
-    goto done;
+  if(buf == 0)
+    buf = kalloc();
+  if(buf == 0)
+    goto rollback;
+
   current = node->first_cluster;
   position = off;
   fat32_chain_init(&chain, current);
@@ -1146,23 +1596,22 @@ fat32_write_at(void *data, int user_src, uint64 src, uint off, uint n)
     uint64 cluster_off;
     uint within = position % fs->cluster_bytes;
     uint take = fs->cluster_bytes - within;
-    if(take > n - total)
-      take = n - total;
     if(take > PGSIZE)
       take = PGSIZE;
+    if(take > n - total)
+      take = n - total;
     if(fat32_cluster_offset(fs, current, &cluster_off) < 0)
       goto rollback;
     if(fat32_copy_in(user_src, buf, src + total, take) < 0)
       goto rollback;
-    // D1 preserves untouched bytes. A legal FAT32 cluster can exceed one
-    // allocator page, so never transfer cluster_bytes into a page buffer.
+    // blk_write preserves neighboring bytes in partial sectors.
     if(fat32_write_bytes(fs, cluster_off + within, buf, take) < 0){
       fatal = 1;
       goto rollback;
     }
     total += take;
     position += take;
-    if(total < n && position % fs->cluster_bytes == 0){
+    if(total < n && within + take == fs->cluster_bytes){
       uint next;
       int r = fat32_chain_advance(fs, &chain, current, &next);
       if(r != 1)
@@ -1176,7 +1625,7 @@ fat32_write_at(void *data, int user_src, uint64 src, uint off, uint n)
     fatal = 1;
     goto rollback;
   }
-  if(blk_flush(fs->dev) < 0){
+  if(fat32_flush(fs) < 0){
     fatal = 1;
     goto rollback;
   }
@@ -1185,14 +1634,10 @@ fat32_write_at(void *data, int user_src, uint64 src, uint off, uint n)
   goto done;
 
 rollback:
-  if(fatal){
-    // A failed metadata transfer/flush may already have published the chain.
-    // Keep allocations and fail closed; freeing them could alias live data.
+  if(fatal)
     fs->write_failed = 1;
-  } else {
-    if(fat32_rollback_extension(node, added_first, old_tail) == 0)
-      node->first_cluster = old_first;
-  }
+  if(fat32_rollback_extension(node, added_first, old_tail) == 0)
+    node->first_cluster = old_first;
 done:
   if(buf)
     kfree(buf);
@@ -1206,7 +1651,7 @@ fat32_truncate_zero(void *data)
 {
   struct fat32_node *node = data;
   struct fat32_fs *fs = node->fs;
-  uint first;
+  uint first, tail, count;
   int r = -1;
 
   if((node->attributes & FAT32_ATTR_DIR) != 0)
@@ -1214,22 +1659,22 @@ fat32_truncate_zero(void *data)
   acquiresleep(&fs->write_lock);
   acquiresleep(&node->lock);
   first = node->first_cluster;
-  if(fs->write_failed || node->deleted)
+  if(fs->write_failed || node->deleted ||
+     fat32_file_chain(fs, first, node->size, &tail, &count) < 0)
     goto done;
   if(fat32_store_entry(fs, node->entry_offset, 0, 0, 0,
                        node->attributes) < 0){
     fs->write_failed = 1;
     goto done;
   }
-  if(blk_flush(fs->dev) < 0){
+  if(fat32_flush(fs) < 0){
     fs->write_failed = 1;
     goto done;
   }
-  // Detach and flush the directory entry before reclaiming its chain.
   node->first_cluster = 0;
   node->size = 0;
   if(first != 0 &&
-     (fat32_free_chain(fs, first) < 0 || blk_flush(fs->dev) < 0)){
+     (fat32_free_chain(fs, first) < 0 || fat32_flush(fs) < 0)){
     fs->write_failed = 1;
     goto done;
   }
@@ -1246,14 +1691,11 @@ fat32_create_file(void *data, const char *name, uint len, void **out_node)
   struct fat32_node *dir = data, *child = 0;
   struct fat32_fs *fs = dir->fs;
   struct fat32_entry entry;
-  uchar short_name[11];
-  uint64 slot_offset;
-  uint tail = 0, new_dir_cluster = 0;
-  int found, slot;
+  struct fat32_name *plan = 0;
+  int found;
 
   *out_node = 0;
-  if(len == 0 || len > VFS_NAME_MAX || fat32_short_name(name, len,
-                                                          short_name) < 0)
+  if(len == 0 || len > VFS_NAME_MAX)
     return -1;
   if((dir->attributes & FAT32_ATTR_DIR) == 0)
     return -1;
@@ -1261,7 +1703,7 @@ fat32_create_file(void *data, const char *name, uint len, void **out_node)
   acquiresleep(&dir->lock);
   if(fs->write_failed || dir->deleted)
     goto done;
-  found = fat32_find_entry(dir, short_name, &entry);
+  found = fat32_find_entry(dir, name, len, &entry);
   if(found == 0){
     if((entry.attributes & FAT32_ATTR_DIR) != 0)
       goto done;
@@ -1275,32 +1717,14 @@ fat32_create_file(void *data, const char *name, uint len, void **out_node)
   }
   if(found < 0)
     goto done;
-  slot = fat32_find_slot(dir, &slot_offset, &tail);
-  if(slot < 0)
+  plan = kalloc();
+  if(plan == 0)
     goto done;
-  if(slot == 1){
-    uint64 cluster_offset;
-    if(fat32_append_cluster(fs, tail, &new_dir_cluster) < 0 ||
-       fat32_cluster_offset(fs, new_dir_cluster, &cluster_offset) < 0){
-      if(new_dir_cluster)
-        fat32_free_chain(fs, new_dir_cluster);
-      goto done;
-    }
-    slot_offset = cluster_offset;
-  }
-  if(fat32_store_entry(fs, slot_offset, 0, 0, short_name,
-                       FAT32_ATTR_FILE) < 0){
-    if(new_dir_cluster){
-      fat32_write_fat_value(fs, tail, FAT32_EOC);
-      fat32_free_chain(fs, new_dir_cluster);
-    }
-    fs->write_failed = 1;
+  memset(plan, 0, sizeof(*plan));
+  if(fat32_plan_name(dir, name, len, plan) < 0 ||
+     fat32_publish_name(dir, plan, 0, FAT32_ATTR_FILE) < 0)
     goto done;
-  }
-  if(blk_flush(fs->dev) < 0){
-    fs->write_failed = 1;
-    goto done;
-  }
+  uint64 slot_offset = plan->offsets[plan->count];
   child = fat32_node_new(fs, slot_offset / FAT32_ENTRY_SIZE + 2,
                          slot_offset, 0, 0, FAT32_ATTR_FILE,
                          dir->first_cluster, dir->ino,
@@ -1308,6 +1732,8 @@ fat32_create_file(void *data, const char *name, uint len, void **out_node)
   if(child)
     *out_node = child;
 done:
+  if(plan)
+    kfree(plan);
   releasesleep(&dir->lock);
   releasesleep(&fs->write_lock);
   return *out_node ? 0 : -1;
@@ -1336,14 +1762,13 @@ fat32_mkdir(void *data, const char *name, uint len)
   struct fat32_node *dir = data;
   struct fat32_fs *fs = dir->fs;
   struct fat32_entry entry;
-  uchar short_name[11];
-  uint64 slot_offset, cluster_offset;
-  uint tail = 0, new_parent_cluster = 0, child_cluster = 0;
+  struct fat32_name *plan = 0;
+  uint64 cluster_offset;
+  uint child_cluster = 0;
   uint parent_cluster;
-  int found, slot, r = -1;
+  int found, r = -1;
 
   if(len == 0 || len > VFS_NAME_MAX ||
-     fat32_short_name(name, len, short_name) < 0 ||
      (dir->attributes & FAT32_ATTR_DIR) == 0 || dir->deleted)
     return -1;
 
@@ -1352,8 +1777,14 @@ fat32_mkdir(void *data, const char *name, uint len)
   if(fs->write_failed || dir->deleted)
     goto done;
 
-  found = fat32_find_entry(dir, short_name, &entry);
+  found = fat32_find_entry(dir, name, len, &entry);
   if(found != 1)
+    goto done;
+  plan = kalloc();
+  if(plan == 0)
+    goto done;
+  memset(plan, 0, sizeof(*plan));
+  if(fat32_plan_name(dir, name, len, plan) < 0)
     goto done;
 
   // FAT32 uses cluster 0 in the root directory's ".." entry.  Other
@@ -1369,46 +1800,43 @@ fat32_mkdir(void *data, const char *name, uint len)
                            parent_cluster) < 0)
     goto rollback;
 
-  slot = fat32_find_slot(dir, &slot_offset, &tail);
-  if(slot < 0)
+  if(fat32_publish_name(dir, plan, child_cluster, FAT32_ATTR_DIR) < 0)
     goto rollback;
-  if(slot == 1){
-    if(fat32_append_cluster(fs, tail, &new_parent_cluster) < 0 ||
-       fat32_cluster_offset(fs, new_parent_cluster, &slot_offset) < 0)
-      goto rollback;
-  }
-  if(fat32_store_entry(fs, slot_offset, child_cluster, 0, short_name,
-                       FAT32_ATTR_DIR) < 0){
-    // The directory entry may have reached disk partially. Leave its target
-    // clusters allocated and stop further writes until offline inspection.
-    fs->write_failed = 1;
-    goto done;
-  }
-  if(blk_flush(fs->dev) < 0){
-    fs->write_failed = 1;
-    goto done;
-  }
   r = 0;
   goto done;
 
 rollback:
   if(fs->write_failed)
     goto done;
-  if(new_parent_cluster != 0){
-    if(fat32_write_fat_value(fs, tail, FAT32_EOC) < 0){
-      fs->write_failed = 1;
-      goto done;
-    } else if(fat32_free_chain(fs, new_parent_cluster) < 0){
-      fs->write_failed = 1;
-      goto done;
-    }
-  }
   if(child_cluster != 0 && fat32_free_chain(fs, child_cluster) < 0)
     fs->write_failed = 1;
 done:
+  if(plan)
+    kfree(plan);
   releasesleep(&dir->lock);
   releasesleep(&fs->write_lock);
   return r;
+}
+
+static int
+fat32_slot_offset(struct fat32_node *dir, uint64 slot, uint64 *out)
+{
+  struct fat32_fs *fs = dir->fs;
+  uint per_cluster = fs->cluster_bytes / FAT32_ENTRY_SIZE;
+  uint64 skip = slot / per_cluster;
+  uint current = dir->first_cluster;
+  if(skip >= fs->cluster_count)
+    return -1;
+  while(skip--){
+    uint next;
+    if(fat32_next(fs, current, &next) != 1)
+      return -1;
+    current = next;
+  }
+  if(fat32_cluster_offset(fs, current, out) < 0)
+    return -1;
+  *out += (slot % per_cluster) * FAT32_ENTRY_SIZE;
+  return 0;
 }
 
 static int
@@ -1417,22 +1845,24 @@ fat32_unlink(void *data, const char *name, uint len)
   struct fat32_node *dir = data, *node;
   struct fat32_fs *fs = dir->fs;
   struct fat32_entry entry;
-  uchar wanted[11], deleted = FAT32_DELETED;
+  uchar deleted = FAT32_DELETED;
   uint tail, clusters;
   uint64 entry_offset;
+  uint64 offsets[FAT32_LFN_SLOTS + 1];
   uint delete_id;
   int found, empty, marked = 0, r = -1;
 
   if(len == 0 || len > VFS_NAME_MAX ||
-     fat32_short_name(name, len, wanted) < 0 ||
      (dir->attributes & FAT32_ATTR_DIR) == 0)
     return -1;
   acquiresleep(&fs->write_lock);
   acquiresleep(&dir->lock);
   if(fs->write_failed || dir->deleted)
     goto done;
-  found = fat32_find_entry(dir, wanted, &entry);
+  found = fat32_find_entry(dir, name, len, &entry);
+  // A corrupt prefix is not safe to associate with the alias for deletion.
   if(found != 0 || entry.offset == 0 ||
+     (entry.lfn_prefix && entry.lfn_count == 0) ||
      (entry.attributes & FAT32_ATTR_VOL))
     goto done;
   if(entry.attributes & FAT32_ATTR_DIR){
@@ -1443,18 +1873,25 @@ fat32_unlink(void *data, const char *name, uint len)
     empty = fat32_directory_empty(fs, entry.first_cluster, parent_cluster);
     if(empty != 1)
       goto done;
-  } else if(entry.size != 0 &&
-            (entry.first_cluster < 2 ||
-             entry.first_cluster > fs->max_cluster)){
+    if(fat32_chain_length(fs, entry.first_cluster, &tail, &clusters) < 0)
+      goto done;
+  } else if(fat32_file_chain(fs, entry.first_cluster, entry.size,
+                             &tail, &clusters) < 0){
     goto done;
   }
-  if(entry.first_cluster != 0 &&
-     fat32_chain_length(fs, entry.first_cluster, &tail, &clusters) < 0)
-    goto done;
 
   entry_offset = entry.offset;
-  if(fat32_write_bytes(fs, entry_offset, &deleted, sizeof(deleted)) < 0 ||
-     blk_flush(fs->dev) < 0){
+  for(uint i = 0; i <= entry.lfn_count; i++)
+    if(fat32_slot_offset(dir, entry.first_slot + i, &offsets[i]) < 0)
+      goto done;
+  if(offsets[entry.lfn_count] != entry_offset)
+    goto done;
+  // Delete the long slots before their alias. Short aliases remain usable
+  // if an I/O failure interrupts removal of the prefix.
+  for(uint i = 0; i <= entry.lfn_count; i++)
+    if(fat32_write_bytes(fs, offsets[i], &deleted, sizeof(deleted)) < 0)
+      goto done;
+  if(fat32_flush(fs) < 0){
     fs->write_failed = 1;
     goto done;
   }
@@ -1527,7 +1964,7 @@ fat32_release(void *data)
     release(&fs->nodes_lock);
     if(node->deleted && node->deleted_cluster != 0 && !fs->write_failed &&
        (fat32_free_chain(fs, node->deleted_cluster) < 0 ||
-        blk_flush(fs->dev) < 0))
+        fat32_flush(fs) < 0))
       fs->write_failed = 1;
     kfree(node);
     node = parent;
@@ -1552,10 +1989,11 @@ fat32_lookup(void *data, const char *name, uint len, void **out_node)
 {
   struct fat32_node *dir = data, *node;
   struct fat32_entry entry;
-  uchar wanted[11];
   int r;
 
   *out_node = 0;
+  if((dir->attributes & FAT32_ATTR_DIR) == 0)
+    return -1;
   if((len == 1 && name[0] == '.') ||
      (len == 2 && name[0] == '.' && name[1] == '.')){
     node = len == 1 || dir->parent == 0 ? dir : dir->parent;
@@ -1565,14 +2003,16 @@ fat32_lookup(void *data, const char *name, uint len, void **out_node)
     *out_node = node;
     return 0;
   }
-  if(fat32_short_name(name, len, wanted) < 0)
-    return -1;
+  // A directory entry snapshot must not race file writes, truncation, unlink
+  // or slot reuse before its shared backend reference has been acquired.
+  acquiresleep(&dir->fs->write_lock);
   acquiresleep(&dir->lock);
-  r = fat32_find_entry(dir, wanted, &entry);
+  r = fat32_find_entry(dir, name, len, &entry);
   if(r != 0 || ((entry.attributes & FAT32_ATTR_DIR) &&
                 (entry.first_cluster < 2 ||
                  entry.first_cluster > dir->fs->max_cluster))){
     releasesleep(&dir->lock);
+    releasesleep(&dir->fs->write_lock);
     return -1;
   }
   uint64 ino = entry.offset / FAT32_ENTRY_SIZE + 2;
@@ -1580,6 +2020,7 @@ fat32_lookup(void *data, const char *name, uint len, void **out_node)
                         entry.size, entry.attributes, dir->first_cluster,
                         dir->ino, dir->parent_cluster, dir->parent_ino);
   releasesleep(&dir->lock);
+  releasesleep(&dir->fs->write_lock);
   *out_node = node;
   return node ? 0 : -1;
 }
@@ -1590,6 +2031,7 @@ fat32_readdir(void *data, uint64 *cursor, struct vfs_dirent *out)
   struct fat32_node *dir = data;
   struct fat32_fs *fs = dir->fs;
   struct fat32_chain chain;
+  struct fat32_lfn lfn = {0};
   uchar *sector = 0;
   uint current = dir->first_cluster;
   uint64 slot = *cursor;
@@ -1640,16 +2082,25 @@ fat32_readdir(void *data, uint64 *cursor, struct vfs_dirent *out)
           result = 0;
           goto done;
         }
-        if(raw[0] == FAT32_DELETED || raw[11] == FAT32_ATTR_LFN ||
-           (raw[11] & FAT32_ATTR_VOL) || raw[0] == '.')
+        if(fat32_lfn_slot(raw)){
+          fat32_lfn_push(&lfn, raw);
           continue;
+        }
+        if(raw[0] == FAT32_DELETED || (raw[11] & FAT32_ATTR_VOL) ||
+           raw[0] == '.'){
+          lfn.present = lfn.slots = 0;
+          continue;
+        }
         struct fat32_entry entry;
         fat32_decode_entry(raw, sector_off + pos, &entry);
         memset(out, 0, sizeof(*out));
         out->ino = entry.offset / FAT32_ENTRY_SIZE + 2;
         out->type = (entry.attributes & FAT32_ATTR_DIR) ? T_DIR : T_FILE;
-        out->namelen = strlen(entry.name);
-        memmove(out->name, entry.name, out->namelen);
+        out->namelen = fat32_lfn_name(&lfn, raw, out->name);
+        if(out->namelen == 0){
+          out->namelen = strlen(entry.name);
+          memmove(out->name, entry.name, out->namelen + 1);
+        }
         *cursor = this_slot + 1;
         result = 1;
         goto done;
@@ -1693,9 +2144,7 @@ fat32_sync(void *data)
 {
   struct fat32_fs *fs = data;
   acquiresleep(&fs->write_lock);
-  int r = fs->write_failed ? -1 : blk_flush(fs->dev);
-  if(r < 0)
-    fs->write_failed = 1;
+  int r = fat32_flush(fs);
   releasesleep(&fs->write_lock);
   return r;
 }

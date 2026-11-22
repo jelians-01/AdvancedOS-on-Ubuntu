@@ -163,6 +163,9 @@ UPROGS=\
 	$U/_ext2write\
 	$U/_ext2single\
 	$U/_ext2dirgrow\
+	$U/_ext2mkdir\
+	$U/_ext2unlink\
+	$U/_ext2link\
 	$U/_fat32test\
 	$U/_fat32persist\
 	$U/_fat32missing\
@@ -171,6 +174,13 @@ UPROGS=\
 	$U/_vfstest1\
 	$U/_vfstest2\
 	$U/_sync\
+	$U/_fat32fault\
+	$U/_fat32large\
+	$U/_fat32vfat\
+	$U/_fat32vwrite\
+	$U/_fat32shared\
+	$U/_fat32mbr\
+	$U/_fsjoint\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
