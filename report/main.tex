@@ -12,13 +12,12 @@
 \usepackage{xcolor,tikz}
 \usetikzlibrary{arrows.meta,positioning,fit}
 \usepackage{listings}
-\usepackage{cite,xurl,balance}
+\usepackage{xurl,balance}
 \usepackage[hidelinks,unicode]{hyperref}
 \renewcommand{\abstractname}{摘要}
 \renewcommand{\IEEEkeywordsname}{关键词}
 \renewcommand{\figurename}{图}
 \renewcommand{\tablename}{表}
-\renewcommand{\refname}{参考文献}
 \renewcommand{\lstlistingname}{代码}
 \hypersetup{pdftitle={基于 xv6 的双架构多文件系统设计与实现},pdfauthor={陈建良、刘晨、周梦武}}
 \lstset{language=C,basicstyle=\ttfamily\fontsize{8.5}{10}\selectfont,
@@ -46,7 +45,7 @@ xv6；虚拟文件系统；ext2；FAT32；RISC-V；LoongArch
 
 \section{项目背景与设计目标}
 \subsection{背景与问题}
-xv6 是用于理解操作系统结构的 Unix 风格教学内核，具有进程、虚拟内存、文件系统和设备驱动等相对完整的基本机制\cite{xv6}。其规模适合阅读与改造，但原生文件路径、inode 操作和磁盘访问之间联系紧密。如果仅在系统调用中逐处加入文件系统类型判断，随着后端增多，路径语义、错误处理及锁规则会分散在多个位置，增加维护与集成成本。
+xv6 是用于理解操作系统结构的 Unix 风格教学内核，具有进程、虚拟内存、文件系统和设备驱动等相对完整的基本机制。其规模适合阅读与改造，但原生文件路径、inode 操作和磁盘访问之间联系紧密。如果仅在系统调用中逐处加入文件系统类型判断，随着后端增多，路径语义、错误处理及锁规则会分散在多个位置，增加维护与集成成本。
 
 本课程项目围绕两个相互关联的问题展开：一是在保留原生文件行为的前提下，使用户程序能够通过统一接口访问不同磁盘格式；二是将文件系统等上层逻辑与处理器、异常入口和设备传输机制分离，使同一组用户操作能够在两种指令集架构上完成。前者要求处理名称与对象的关系，后者要求明确机器相关代码的边界。单独完成一个文件读取器，或单独启动一段平台实验程序，都不能证明这两个目标已经同时实现。
 
@@ -153,7 +152,7 @@ vfs_follow_mount(out);
 
 \subsection{刘晨：ext2 文件与目录后端}
 \subsubsection{格式解析和按偏移读写}
-ext2 使用超级块、组描述符、位图、inode 表和数据块组织卷内容\cite{ext2}。本后端将磁盘结构解析为私有实例与 inode 对象，再通过 VFS 操作表对外提供服务。挂载时先检查格式与容量边界，不能仅因魔数正确就允许全部写入。
+ext2 使用超级块、组描述符、位图、inode 表和数据块组织卷内容。本后端将磁盘结构解析为私有实例与 inode 对象，再通过 VFS 操作表对外提供服务。挂载时先检查格式与容量边界，不能仅因魔数正确就允许全部写入。
 
 文件读取将字节偏移分解为逻辑块号和块内偏移，如代码\ref{lst:ext2}所示。\code{ext2\_map\_block} 将逻辑块转换成磁盘物理块。一个请求可能跨多个块，因此每次处理长度由当前块的剩余空间和请求剩余长度共同限制；稀疏区域按零填充，读取或用户拷贝失败时返回实际进展。
 
@@ -195,7 +194,7 @@ FAT32 后端使用卷引导参数、文件分配表和目录项解释磁盘数�
 多个句柄、长名与短名别名可能指向同一个磁盘对象。后端通过共享节点维护一致的大小、删除状态和父引用；目录也需要共享身份，才能正确处理 \code{.}、\code{..} 与深层父路径。原结题集成中的这些保护在新版本合并时保留，避免功能增加后重新引入生命周期问题。
 
 \subsubsection{VFAT 名称与删除组}
-VFAT 在短目录项之外使用长名称记录表达更丰富的名称\cite{vfat}。本后端将用户输入的 UTF-8 与磁盘 UTF-16 表示转换，检查名称顺序、校验关联及终止条件，并保留 8.3 别名。ASCII 字母匹配不区分大小写，其他字符按实际内容匹配；整条路径含结束符仍受 \code{MAXPATH=128} 限制。
+VFAT 在短目录项之外使用长名称记录表达更丰富的名称。本后端将用户输入的 UTF-8 与磁盘 UTF-16 表示转换，检查名称顺序、校验关联及终止条件，并保留 8.3 别名。ASCII 字母匹配不区分大小写，其他字符按实际内容匹配；整条路径含结束符仍受 \code{MAXPATH=128} 限制。
 
 长名称记录可能跨越目录簇边界，不能假定整个名称总在一个缓冲区内。创建时需要保证长名组与短目录项之间的对应关系；删除时应处理整组记录，避免留下孤立长名项。对于故意损坏的长名组，测试分别检查短别名回退和拒绝破坏性部分删除，而不是将所有异常输入当作正常名字继续写入。
 
@@ -211,7 +210,7 @@ FSInfo 的空闲计数与下次搜索位置是分配提示，不是取代 FAT �
 
 \subsection{周梦武：字节块设备与平台支撑}
 \subsubsection{D1 字节请求到扇区传输}
-D1 向上提供 \code{blk\_read/write/size/flush}，向下调用平台传输。VirtIO 的设备约定为驱动实现提供统一基础\cite{virtio}，但上层字节请求通常不会恰好对齐扇区边界。代码\ref{lst:d1}给出每轮切分长度的计算：\code{skip} 为首扇区偏移，\code{take} 为本轮处理字节数。
+D1 向上提供 \code{blk\_read/write/size/flush}，向下调用平台传输。VirtIO 的设备约定为驱动实现提供统一基础，但上层字节请求通常不会恰好对齐扇区边界。代码\ref{lst:d1}给出每轮切分长度的计算：\code{skip} 为首扇区偏移，\code{take} 为本轮处理字节数。
 
 \begin{lstlisting}[float=tb,caption={D1 请求切分与进度推进（节选自 kernel/blkdev.c，省略传输分支）},label={lst:d1}]
 uint skip = off % VDISK_SECTOR_SIZE;
@@ -230,7 +229,7 @@ n -= take;
 设备级睡眠锁覆盖整个字节请求，使共享扇区缓冲及非对齐读改写不被同设备上的并发请求打断。边界检查使用 \code{n > size - off} 等减法形式防止 \code{off+n} 溢出。DMA 通过每设备的静态扇区缓冲完成，而不是直接使用可能处于非恒等映射高地址的内核栈。D1 还禁止直接写原生根设备，避免绕过其块缓存与日志；原生路径仍走原有机制。
 
 \subsubsection{多盘与双架构边界}
-RISC-V 使用 VirtIO MMIO，LoongArch 使用 VirtIO PCI。平台差异集中于启动、页表、异常和中断、上下文切换、串口及 PCI 设备发现等部分；VFS、ext2、FAT32 和大部分用户程序共用源码。LoongArch 的异常与页表权限实现依据其体系结构约定\cite{loongarch}，不能通过仅更换编译器或 QEMU 名称完成移植。
+RISC-V 使用 VirtIO MMIO，LoongArch 使用 VirtIO PCI。平台差异集中于启动、页表、异常和中断、上下文切换、串口及 PCI 设备发现等部分；VFS、ext2、FAT32 和大部分用户程序共用源码。LoongArch 的异常与页表权限实现依据其体系结构约定，不能通过仅更换编译器或 QEMU 名称完成移植。
 
 正式 LoongArch 版本已经能够运行 \code{init/sh} 和用户测试。验证配置为单 CPU、模拟器分配 1 GiB 内存，内核使用低 128 MiB；PCI 磁盘采用轮询方式。RISC-V 验证使用 3 CPU、128 MiB。两者执行同类功能测试，说明共享逻辑在这些配置下可用，但不同 CPU 数、设备传输和工具链不构成受控性能对比，本报告不据此给出速度或吞吐量结论。
 
@@ -286,7 +285,7 @@ joint/MBR，13 条顶层记录 & 通过 & 通过 \\
 通过当前用例只能支持测试条件内的结论。宿主文件系统工具返回零、完整字节比较正确和正常重启成功，为已经覆盖的操作提供证据；它们不能证明所有未覆盖的格式特性、任意并发时序、所有畸形镜像和任意掉电点均安全。RISC-V 与 LoongArch 都运行在 QEMU 中，尚无实机验证。系统也未开展统一硬件资源下的性能基准，故不报告性能提升比例。
 
 \section{代码交付与部署说明}
-代码交付仓库与指定发布分支如下，目标分支为 \code{master}\cite{project}。部署步骤见该仓库根目录的 README，包括构建依赖、双架构启动、展示用例与结果判据；本报告不重复维护可能随交付目录调整而变化的机器路径。项目主体位于 \code{xv6-riscv/}，内核、用户程序、镜像构建和测试目录分别表达实现与验证边界；\code{demo/} 保存展示所需内容，\code{report/} 保存本报告及可编辑 LaTeX 源文件。
+代码交付仓库与指定发布分支如下，目标分支为 \code{master}。部署步骤见该仓库根目录的 README，包括构建依赖、双架构启动、展示用例与结果判据；本报告不重复维护可能随交付目录调整而变化的机器路径。项目主体位于 \code{xv6-riscv/}，内核、用户程序、镜像构建和测试目录分别表达实现与验证边界；\code{demo/} 保存展示所需内容，\code{report/} 保存本报告及可编辑 LaTeX 源文件。
 
 \begin{center}
 \small
@@ -307,12 +306,4 @@ joint/MBR，13 条顶层记录 & 通过 & 通过 \\
 
 平台方向可进一步研究 LoongArch 多核与中断驱动 I/O，在同等资源配置下增加性能测量，并最终开展实机验证。所有扩展都应保持统一接口和独立可复现测试，使新的能力建立在已有正确性证据之上。
 
-\begin{thebibliography}{00}
-\bibitem{xv6} R. Cox, M. F. Kaashoek, and R. Morris, \emph{xv6: a simple, Unix-like teaching operating system}, RISC-V rev. 5, MIT, 2025. [Online]. Available: \url{https://pdos.csail.mit.edu/6.828/2025/xv6/book-riscv-rev5.pdf}
-\bibitem{ext2} The Linux Kernel Documentation, ``The Second Extended Filesystem.'' [Online]. Available: \url{https://docs.kernel.org/filesystems/ext2.html}
-\bibitem{vfat} The Linux Kernel Documentation, ``VFAT filesystem.'' [Online]. Available: \url{https://github.com/torvalds/linux/blob/master/Documentation/filesystems/vfat.rst}
-\bibitem{virtio} OASIS, \emph{Virtual I/O Device (VIRTIO) Version 1.2}, Committee Specification 01, 2022. [Online]. Available: \url{https://docs.oasis-open.org/virtio/virtio/v1.2/virtio-v1.2.html}
-\bibitem{loongarch} Loongson Technology Corporation Limited, \emph{LoongArch Reference Manual, Volume 1: Basic Architecture}, ver. 1.10. [Online]. Available: \url{https://loongson.github.io/LoongArch-Documentation/LoongArch-Vol1-EN.html}
-\bibitem{project} 陈建良、刘晨、周梦武，``AdvancedOS-on-Ubuntu：课程项目源码与部署说明.'' [Online]. Available: \url{https://github.com/jelians-01/AdvancedOS-on-Ubuntu/tree/master}
-\end{thebibliography}
 \end{document}
